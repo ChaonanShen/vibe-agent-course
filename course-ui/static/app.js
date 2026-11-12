@@ -1446,11 +1446,71 @@ function buildDemoCard(demo, indexNum, scope, course) {
 }
 
 // ---------------- 工具 ----------------
-function append(el, text, cls = '') {
+// 终端面板是普通 DOM，不是一个 ANSI 终端模拟器。demo 里常见的
+// `\r` + `\x1b[K`（回到行首 + 清除到行尾，用来原地刷新「💭 thinking...」）
+// 直接写进 textContent 会变成：CSS 把 \r 当换行、ESC 不可见、只剩 "[K" 当正文。
+// 这里做极简的行编辑器：维护「当前行」的字符数组和光标，模拟 \r / \n / CSI K，
+// 其余 ANSI 序列（颜色等）忽略，从而在网页里也能正确清行重写。
+const termState = new WeakMap();
+
+function termStateFor(el) {
+  let st = termState.get(el);
+  // out.innerHTML = '' 会清空 DOM，此时状态也要跟着重置
+  if (!st || !st.line || !el.contains(st.line)) {
+    st = { chars: [], cursor: 0, line: null, cls: null, pending: '', pendingCls: null };
+    termState.set(el, st);
+  }
+  return st;
+}
+
+function termNewLine(el, st, cls) {
   const span = document.createElement('span');
   if (cls) span.className = cls;
-  span.textContent = text;
   el.appendChild(span);
+  st.line = span;
+  st.cls = cls;
+  st.chars = [];
+  st.cursor = 0;
+}
+
+function append(el, text, cls = '') {
+  const st = termStateFor(el);
+  if (!st.line || st.cls !== cls) termNewLine(el, st, cls);
+
+  // SSE 可能把一条转义序列切成两半，把上次剩余的部分拼回本次开头
+  const src = (st.pendingCls === cls ? st.pending : '') + String(text);
+  st.pending = '';
+  st.pendingCls = cls;
+  const cps = Array.from(src); // 按码点处理，避免把 emoji 拆成两个代理项
+  let i = 0;
+  while (i < cps.length) {
+    const ch = cps[i];
+    if (ch === '\x1b') {
+      if (i + 1 >= cps.length) { st.pending = '\x1b'; break; }
+      if (cps[i + 1] === '[') {
+        // CSI: ESC [ 参数字节(0x20-0x3f)* 结束字节(0x40-0x7e)
+        let j = i + 2;
+        while (j < cps.length && /[\x20-\x3f]/.test(cps[j])) j++;
+        if (j >= cps.length) { st.pending = cps.slice(i).join(''); break; }
+        if (cps[j] === 'K') st.chars.length = st.cursor; // EL: 清光标到行尾
+        i = j + 1;
+      } else {
+        i += 2; // 非 CSI 的 ESC 序列，直接丢弃
+      }
+      continue;
+    }
+    if (ch === '\r') { st.cursor = 0; i++; continue; }
+    if (ch === '\b') { st.cursor = Math.max(0, st.cursor - 1); i++; continue; }
+    if (ch === '\n') {
+      st.line.textContent = st.chars.join('') + '\n';
+      termNewLine(el, st, cls);
+      i++;
+      continue;
+    }
+    st.chars[st.cursor++] = ch;
+    i++;
+  }
+  if (st.line) st.line.textContent = st.chars.join('');
   el.scrollTop = el.scrollHeight;
 }
 function appendMeta(el, text) {
