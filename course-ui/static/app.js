@@ -75,18 +75,118 @@ function loadMermaid() {
   return mermaidLoadPromise;
 }
 
-function initMermaid() {
-  if (mermaidInited || !hasMermaid()) return;
+function initMermaid(force) {
+  if (!hasMermaid()) return;
+  if (mermaidInited && !force) return;
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
   window.mermaid.initialize({
     startOnLoad: false,
     // loose：允许 label 里的 <b> / <br/> 等 HTML（讲义里的流程图用了这些）
     securityLevel: 'loose',
-    theme: 'default',
+    // 跟随站点深浅色主题（mermaid 自带 dark 主题，比我们自己反色更清晰）
+    theme: dark ? 'dark' : 'default',
+    darkMode: dark,
+    background: dark ? '#141416' : '#ffffff',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
     flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: true },
     sequence: { useMaxWidth: true },
   });
+  window.__mermaidDark = dark;
   mermaidInited = true;
+}
+
+// 深色模式下 mermaid dark 主题给文字 #ccc，而讲义里的 `style X fill:#e3f2fd`
+// 是亮色浅底 —— 两者一撞就成了「浅底浅字」。这里只对浅底节点补一个深色文字。
+const DARK_NODE_TEXT = '#1d1d1f';
+const MERMAID_SHAPE_SEL = 'rect, polygon, path, circle, ellipse';
+
+/** 修深色模式下的节点文字对比度：只动浅底节点，深底节点保持主题原色。 */
+function fixMermaidNodeContrast(svg) {
+  if (!window.__mermaidDark) return;
+  // style 语法落成 SVG 上带 !important 的行内 CSS，这里同样用 !important 压过去
+  svg.querySelectorAll('.node, .cluster').forEach((node) => {
+    const shape = node.querySelector(MERMAID_SHAPE_SEL);
+    const bg = shape ? shape.style.fill || shape.getAttribute('fill') : '';
+    // 没显式底色 = 跟着主题走，不用管
+    if (!bg || isDarkColor(bg)) return;
+    node.querySelectorAll('span, div, p, text, tspan').forEach((t) => {
+      t.style.setProperty('color', DARK_NODE_TEXT, 'important');
+      t.style.setProperty('fill', DARK_NODE_TEXT, 'important');
+    });
+  });
+}
+
+/** 判断 CSS 颜色是否偏暗（#rgb / #rrggbb / rgb() / rgba()；认不出的当深色跳过）。 */
+function isDarkColor(color) {
+  const c = String(color).trim();
+  const hex = c.match(/^#([0-9a-f]+)\b/i);
+  const rgb = c.match(/^rgba?\(([^)]+)\)/i);
+  let r, g, b;
+  if (hex) {
+    const v = hex[1].length <= 4 ? hex[1].split('').map((x) => x + x).join('') : hex[1];
+    r = parseInt(v.slice(0, 2), 16) || 0;
+    g = parseInt(v.slice(2, 4), 16) || 0;
+    b = parseInt(v.slice(4, 6), 16) || 0;
+  } else if (rgb) {
+    const parts = rgb[1].split(',').map((x) => parseFloat(x));
+    r = parts[0] || 0; g = parts[1] || 0; b = parts[2] || 0;
+  } else {
+    return true;
+  }
+  // 亮度阈值 0.5：#e3f2fd 这类浅底判亮，#1f2023 这类深底判暗
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+}
+
+// ---------------- 主题（浅色 / 深色 / 跟随系统） ----------------
+// 真正的「首屏不闪」逻辑放在 index.html 的内联脚本里（CSS 之后立刻执行），
+// 这里只负责：切换按钮 UI、循环切换、以及主题变化后的图表重绘。
+const THEME_ICONS = { light: '.icon-sun', dark: '.icon-moon', auto: '.icon-auto' };
+const THEME_ORDER = ['light', 'dark', 'auto'];
+const THEME_LABEL = { light: '浅色', dark: '深色', auto: '跟随系统' };
+
+function applyThemeIcon(mode) {
+  const btn = $('#theme-toggle');
+  if (!btn) return;
+  btn.dataset.mode = mode;
+  btn.title = `外观：${THEME_LABEL[mode]}（点击切换）`;
+  Object.entries(THEME_ICONS).forEach(([m, sel]) => {
+    const el = $(sel, btn);
+    if (el) el.style.display = m === mode ? '' : 'none';
+  });
+}
+
+function setupTheme() {
+  const btn = $('#theme-toggle');
+  const api = window.__theme;
+  if (!api) return;
+  applyThemeIcon(api.get());
+  if (btn) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = THEME_ORDER[(THEME_ORDER.indexOf(api.get()) + 1) % THEME_ORDER.length];
+      api.set(next);
+      toast(`外观：${THEME_LABEL[next]}`, 'info', 1200);
+    });
+  }
+  document.addEventListener('theme:change', (e) => {
+    applyThemeIcon((e.detail && e.detail.mode) || api.get());
+    rerenderMermaidForTheme();
+  });
+}
+
+/** 主题变化后，把页面上已渲染的 mermaid 图按新主题重画一遍。 */
+function rerenderMermaidForTheme() {
+  const boxes = $$('.mermaid-box').filter((b) => b.dataset.mmdSrc);
+  if (!boxes.length || !hasMermaid()) return;
+  initMermaid(true);
+  boxes.forEach((box) => {
+    const src = box.dataset.mmdSrc;
+    box.classList.add('loading');
+    box.innerHTML = '<div class="mermaid-loading">图表渲染中…</div>';
+    renderOneMermaid(box, src, box.dataset.mmdRaw || '').then(() => {
+      box.dataset.mmdSrc = src;
+    });
+  });
 }
 
 const MERMAID_LANG_RE = /(^|\s)(language-|lang-)?mermaid(\s|$)/i;
@@ -147,10 +247,15 @@ function restoreMermaidBlock(box, rawHtml) {
 
 async function renderOneMermaid(box, src, rawHtml) {
   const id = `mmd-${mermaidSeq++}`;
+  // 记住源码：切换深浅色主题后需要按新主题重绘
+  box.dataset.mmdSrc = src;
+  box.dataset.mmdRaw = rawHtml || '';
   try {
     const { svg } = await window.mermaid.render(id, src);
     box.classList.remove('loading');
     box.innerHTML = svg;
+    const svgEl = box.querySelector('svg');
+    if (svgEl) fixMermaidNodeContrast(svgEl);
   } catch (err) {
     box.classList.remove('loading');
     box.classList.add('mermaid-error');
@@ -1505,6 +1610,9 @@ function openFolderInIDE(relPath, hintFile) {
 
 // ---------------- 启动钩子 ----------------
 document.addEventListener('DOMContentLoaded', () => {
+  // 主题切换：按钮 + 主题变化后的图表重绘
+  setupTheme();
+
   // pin 按钮：钉住/解除侧栏（写入 localStorage）
   const pinBtn = document.getElementById('pin-btn');
   const app = document.querySelector('.app');

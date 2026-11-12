@@ -5,7 +5,52 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Vibe Agent · 课程学习中心</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="stylesheet" href="/static/vendor/atom-one-light.min.css" />
+  <!-- 代码高亮：浅色 / 深色两套 atom-one 主题，由 data-theme 决定生效哪一套 -->
+  <link rel="stylesheet" href="/static/vendor/atom-one-light.min.css" media="(prefers-color-scheme: light)" data-theme-light />
+  <link rel="stylesheet" href="/static/vendor/atom-one-dark.min.css" media="(prefers-color-scheme: dark)" data-theme-dark />
+  <script>
+    // 主题引导：必须在上面的样式表之后、首屏绘制之前执行，避免白屏闪烁（FOUC）。
+    // 模式三态：light / dark / auto（auto 跟随系统 prefers-color-scheme）
+    (function () {
+      var KEY = 'vibe-ui.theme';
+      var saved = null;
+      try { saved = localStorage.getItem(KEY); } catch (e) {}
+      var mode = saved === 'light' || saved === 'dark' || saved === 'auto' ? saved : 'auto';
+      var mql = window.matchMedia('(prefers-color-scheme: dark)');
+      function resolve(m) { return m === 'auto' ? (mql.matches ? 'dark' : 'light') : m; }
+      function sync() {
+        var theme = resolve(mode);
+        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-theme-mode', mode);
+        document.documentElement.style.colorScheme = theme;
+        // 让高亮样式表与当前主题一致（media 属性只能同时命中一个）
+        document.querySelectorAll('link[data-theme-light]').forEach(function (l) {
+          l.media = theme === 'light' ? 'all' : 'not all';
+          l.disabled = theme !== 'light';
+        });
+        document.querySelectorAll('link[data-theme-dark]').forEach(function (l) {
+          l.media = theme === 'dark' ? 'all' : 'not all';
+          l.disabled = theme !== 'dark';
+        });
+      }
+      sync();
+      // 暴露给 app.js 复用；auto 模式下的系统主题变化也要即时生效
+      window.__theme = {
+        KEY: KEY,
+        get: function () { return mode; },
+        set: function (m) {
+          mode = m;
+          try { localStorage.setItem(KEY, m); } catch (e) {}
+          sync();
+          document.dispatchEvent(new CustomEvent('theme:change', { detail: { mode: m, theme: resolve(m) } }));
+        },
+        resolved: function () { return resolve(mode); }
+      };
+      var onSys = function () { if (mode === 'auto') { sync(); document.dispatchEvent(new CustomEvent('theme:change', { detail: { mode: mode, theme: resolve(mode) } })); } };
+      if (mql.addEventListener) mql.addEventListener('change', onSys);
+      else if (mql.addListener) mql.addListener(onSys);
+    })();
+  </script>
 </head>
 <body>
   <div class="progress-line" id="progress-line"></div>
@@ -53,6 +98,22 @@
           <span id="crumb-piece" class="crumb-piece">课程学习中心</span>
         </div>
         <div class="topbar-actions">
+          <button class="theme-toggle" id="theme-toggle" type="button"
+                  title="切换外观（浅色 / 深色 / 跟随系统）" aria-label="切换外观">
+            <span class="mode-dot"></span>
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+            <svg class="icon-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M12 3v18" />
+              <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
+            </svg>
+          </button>
           <a class="ghost" target="_blank" rel="noreferrer" title="在 CNB 查看仓库"
              href="https://cnb.cool/opencamp/learning-agent/vibe-agent-course"
             >CNB 仓库</a>

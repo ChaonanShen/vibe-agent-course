@@ -29,6 +29,33 @@
 
   --c-code-bg:    #f5f5f7;
   --c-code-bd:    #d2d2d7;
+  --c-code-inline: #be185d;      /* 行内 code 文字 */
+
+  /* 玻璃面板 / hover / 遮罩等半透明色，深浅色主题各一套 */
+  --c-glass:      rgba(255, 255, 255, 0.72);
+  --c-glass-side: rgba(251, 251, 253, 0.95);
+  --c-hover:      rgba(0, 0, 0, 0.04);
+  --c-hover-strong: rgba(0, 0, 0, 0.06);
+  --c-active-bg:  rgba(0, 113, 227, 0.06);
+  --c-active-bg-h: rgba(0, 113, 227, 0.12);
+  --c-shadow-color: rgba(0, 0, 0, 0.06);
+  --c-scroll:     rgba(0, 0, 0, 0.18);
+  --c-scroll-h:   rgba(0, 0, 0, 0.32);
+
+  /* 绿色（练习区）/ 琥珀色（笔记区）语义色 */
+  --c-green:      #1f9d55;
+  --c-green-d:    #157a42;
+  --c-green-bg:   #ffffff;
+  --c-amber-d:    #92400e;
+  --c-amber-txt:  #b45309;
+  --c-amber-bd:   #f4e6b3;
+  --c-amber-bg:   linear-gradient(180deg, #fffbef, #fff);
+  --c-amber-bg-h: linear-gradient(180deg, #fff8e0, #fffbef);
+
+  /* 图片反色（深色下微调，避免纯白图刺眼）；浅色下保持原样 */
+  --c-img-filter: none;
+
+  --theme-duration: .22s;
 
   --radius-sm:    8px;
   --radius:       12px;
@@ -46,6 +73,78 @@
                   "Segoe UI", "PingFang SC", "Microsoft YaHei",
                   "Helvetica Neue", Arial, sans-serif;
   --font-mono:    "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+/* =========================================================================
+   深色主题（Apple 深色灰阶）
+   由 <html data-theme="dark"> 激活；data-theme="light" 时显式锁回浅色。
+   ========================================================================= */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --c-bg:        #000000;
+  --c-bg-soft:   #1c1c1e;
+  --c-bg-soft2:  #141416;
+  --c-surface:   #161618;
+
+  --c-text:      #f5f5f7;
+  --c-text-2:    #a1a1a6;
+  --c-text-3:    #8e8e93;
+  --c-text-4:    #6e6e73;
+
+  --c-border:    #3a3a3c;
+  --c-border-2:  #2c2c2e;
+  --c-border-3:  #232325;
+
+  --c-primary:    #0a84ff;
+  --c-primary-h:  #2997ff;
+  --c-mint:       #30d158;
+  --c-amber:      #ff9f0a;
+  --c-rose:       #ff453a;
+  --c-magenta:    #ff375f;
+
+  --c-code-bg:    #1c1c1e;
+  --c-code-bd:    #2c2c2e;
+  --c-code-inline: #ff7ab2;
+
+  --c-glass:      rgba(22, 22, 24, 0.72);
+  --c-glass-side: rgba(22, 22, 24, 0.95);
+  --c-hover:      rgba(255, 255, 255, 0.06);
+  --c-hover-strong: rgba(255, 255, 255, 0.10);
+  --c-active-bg:  rgba(10, 132, 255, 0.14);
+  --c-active-bg-h: rgba(10, 132, 255, 0.24);
+  --c-shadow-color: rgba(0, 0, 0, 0.55);
+  --c-scroll:     rgba(255, 255, 255, 0.16);
+  --c-scroll-h:   rgba(255, 255, 255, 0.28);
+
+  --c-green:      #30d158;
+  --c-green-d:    #4ade80;
+  --c-green-bg:   #16211a;
+  --c-amber-d:    #f0b429;
+  --c-amber-txt:  #d9a441;
+  --c-amber-bd:   #3a3222;
+  --c-amber-bg:   linear-gradient(180deg, #1a1710, #14120c);
+  --c-amber-bg-h: linear-gradient(180deg, #221d12, #1a1710);
+
+  --c-img-filter: brightness(.88) contrast(1.02);
+
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md:    0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-lg:    0 24px 60px rgba(0, 0, 0, 0.7);
+}
+
+/* 主题色切换时做一次柔和过渡（尊重「减少动态效果」偏好） */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme] body,
+  html[data-theme] .sidebar,
+  html[data-theme] .topbar,
+  html[data-theme] .demo-card,
+  html[data-theme] .demo-body,
+  html[data-theme] .demo-source {
+    transition: background-color var(--theme-duration) var(--ease),
+                color var(--theme-duration) var(--ease),
+                border-color var(--theme-duration) var(--ease);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -85,7 +184,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .sidebar {
   position: sticky; top: 0; height: 100vh;
   display: flex; flex-direction: column;
-  background: rgba(251, 251, 253, 0.95);
+  background: var(--c-glass-side);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-right: 1px solid var(--c-border-2);
@@ -97,7 +196,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 /* hover 自动展开 */
 .app:not(.sidebar-pinned) .sidebar:hover {
   width: 320px;
-  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.06);
+  box-shadow: 6px 0 24px var(--c-shadow-color);
 }
 /* 钉住时永远展开 */
 .app.sidebar-pinned .sidebar { width: 320px; }
@@ -167,7 +266,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: all .15s var(--ease);
   flex-shrink: 0;
 }
-.pin-btn:hover { background: rgba(0,0,0,0.06); color: var(--c-text); }
+.pin-btn:hover { background: var(--c-hover-strong); color: var(--c-text); }
 .app.sidebar-pinned .pin-btn {
   background: rgba(0,113,227,0.10); color: var(--c-primary);
 }
@@ -190,8 +289,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: background .15s var(--ease);
   position: relative;
 }
-.nav-course-header:hover { background: rgba(0, 0, 0, 0.04); }
-.nav-course.open .nav-course-header { background: rgba(0, 113, 227, 0.06); }
+.nav-course-header:hover { background: var(--c-hover); }
+.nav-course.open .nav-course-header { background: var(--c-active-bg); }
 .nav-course-index {
   width: 32px; height: 32px; border-radius: 9px;
   display: grid; place-items: center;
@@ -251,7 +350,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   letter-spacing: -0.01em;
   transition: background .15s var(--ease), color .15s var(--ease);
 }
-.nav-item:hover { background: rgba(0, 0, 0, 0.04); color: var(--c-text); }
+.nav-item:hover { background: var(--c-hover); color: var(--c-text); }
 .nav-item.active { background: var(--c-primary); color: #fff; }
 .nav-item.active .badge {
   background: rgba(255, 255, 255, 0.22);
@@ -294,7 +393,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .topbar {
   height: 52px; padding: 0 32px;
   display: flex; align-items: center; justify-content: space-between;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--c-glass);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--c-border-2);
@@ -416,7 +515,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   max-width: 720px;
 }
 .hero-tip code {
-  background: #fff;
+  background: var(--c-surface);
   padding: 1px 6px; border-radius: 4px;
   border: 1px solid var(--c-border-2);
   font-size: 0.92em;
@@ -461,9 +560,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 }
 .tab:hover { color: var(--c-text); }
 .tab.active {
-  background: #fff;
+  background: var(--c-surface);
   color: var(--c-text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 3px var(--c-shadow-color);
   font-weight: 600;
 }
 .tab .pill {
@@ -498,7 +597,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .markdown code {
   background: var(--c-bg-soft);
   padding: 2px 6px; border-radius: 5px;
-  font-size: 0.88em; color: #be185d;
+  font-size: 0.88em; color: var(--c-code-inline);
 }
 .markdown pre {
   background: var(--c-code-bg) !important;
@@ -544,7 +643,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 }
 @keyframes mermaidSpin { to { transform: rotate(360deg); } }
 .markdown .mermaid-box.mermaid-error {
-  background: #fff5f5;
+  background: rgba(255, 59, 48, 0.08);
   border-color: var(--c-rose);
   text-align: left;
 }
@@ -572,7 +671,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .markdown thead { background: var(--c-bg-soft); }
 .markdown thead th { font-weight: 600; color: var(--c-text); letter-spacing: -0.01em; }
 .markdown tbody tr:hover { background: var(--c-bg-soft2); }
-.markdown img { max-width: 100%; border-radius: 12px; margin: 16px 0; }
+.markdown img { max-width: 100%; border-radius: 12px; margin: 16px 0; filter: var(--c-img-filter); }
 .markdown ul, .markdown ol { padding-left: 1.4em; }
 .markdown li { margin: 4px 0; }
 .markdown hr { border: none; border-top: 1px solid var(--c-border-2); margin: 28px 0; }
@@ -779,8 +878,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 /* 滚动条 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.18); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.32); background-clip: padding-box; border: 2px solid transparent; }
+::-webkit-scrollbar-thumb { background: var(--c-scroll); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--c-scroll-h); background-clip: padding-box; border: 2px solid transparent; }
 .terminal-output::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); }
 
 /* 响应式 */
@@ -849,7 +948,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* 章节序号——苹果发布会"超大数字"细节 */
 .course-head .num {
-  background: linear-gradient(135deg, #1d1d1f 0%, #6e6e73 100%);
+  background: linear-gradient(135deg, var(--c-text) 0%, var(--c-text-2) 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 
@@ -907,13 +1006,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: all .15s var(--ease);
 }
 .demo-source .src-head .iconbtn:hover {
-  color: var(--c-text); background: rgba(0,0,0,0.04);
+  color: var(--c-text); background: var(--c-hover);
 }
 .demo-source .src-head .iconbtn.primary {
   color: var(--c-primary);
 }
 .demo-source .src-head .iconbtn.primary:hover {
-  background: rgba(0,113,227,0.08);
+  background: var(--c-active-bg);
 }
 .demo-source .src-head .iconbtn[disabled] {
   opacity: 0.4; cursor: not-allowed;
@@ -959,7 +1058,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   pointer-events: none;
 }
 .toast {
-  background: rgba(29,29,31,0.95); color: #fff;
+  background: rgba(29,29,31,0.92); color: #fff;
   backdrop-filter: blur(20px);
   padding: 11px 22px; border-radius: 980px;
   font-size: 13px; font-weight: 500;
@@ -1021,7 +1120,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   font-family: inherit; transition: background .15s var(--ease), opacity .15s var(--ease);
 }
 .modal-btn.muted { background: var(--c-bg-soft); color: var(--c-text); }
-.modal-btn.muted:hover { background: #ececf0; }
+.modal-btn.muted:hover { background: var(--c-hover-strong); }
 .modal-btn.primary { background: var(--c-primary); color: #fff; }
 .modal-btn.primary:hover { background: var(--c-primary-h); }
 .modal-btn:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; }
@@ -1051,14 +1150,14 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* 「📝 本章练习」入口：绿色调以区别于讲义↔Demo 的蓝色跨 tab 跳转 */
 .cross-tab-jump.exercise-jump {
-  color: #1f9d55;
-  background: rgba(31,157,85,0.07);
-  border-color: rgba(31,157,85,0.18);
+  color: var(--c-green);
+  background: rgba(31,157,85,0.10);
+  border-color: rgba(31,157,85,0.24);
 }
 .cross-tab-jump.exercise-jump:hover {
-  color: #157a42;
-  background: rgba(31,157,85,0.14);
-  border-color: rgba(31,157,85,0.3);
+  color: var(--c-green-d);
+  background: rgba(31,157,85,0.20);
+  border-color: rgba(31,157,85,0.4);
 }
 
 /* =========================================================================
@@ -1089,7 +1188,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .ex-banner-text { flex: 1; min-width: 0; }
 .ex-banner-title {
   font-size: 16px; font-weight: 600;
-  color: #157a42;
+  color: var(--c-green-d);
   margin-bottom: 4px;
 }
 .ex-banner-sub {
@@ -1097,8 +1196,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   line-height: 1.6;
 }
 .ex-banner-sub code {
-  background: rgba(31,157,85,0.10);
-  color: #157a42;
+  background: rgba(31,157,85,0.14);
+  color: var(--c-green-d);
   padding: 1px 6px;
   border-radius: 4px;
   font-family: var(--font-mono);
@@ -1107,8 +1206,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .ex-open-all {
   flex-shrink: 0;
   border: 1px solid rgba(31,157,85,0.35);
-  background: #fff;
-  color: #157a42;
+  background: var(--c-green-bg);
+  color: var(--c-green-d);
   padding: 9px 16px;
   border-radius: 999px;
   font-size: 13px;
@@ -1117,9 +1216,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: all .15s var(--ease);
 }
 .ex-open-all:hover {
-  background: #1f9d55;
+  background: var(--c-green);
   color: #fff;
-  border-color: #1f9d55;
+  border-color: var(--c-green);
   transform: translateY(-1px);
 }
 
@@ -1159,8 +1258,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   width: 36px; height: 36px;
   display: grid; place-items: center;
   border-radius: 10px;
-  background: rgba(31,157,85,0.10);
-  color: #157a42;
+  background: rgba(31,157,85,0.14);
+  color: var(--c-green-d);
   font-family: var(--font-mono);
   font-size: 13px; font-weight: 700;
 }
@@ -1180,8 +1279,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   font-family: var(--font-mono);
   font-size: 10px; padding: 2px 6px; border-radius: 4px;
   letter-spacing: 0.4px; font-weight: 700;
-  background: rgba(31,157,85,0.10);
-  color: #157a42;
+  background: rgba(31,157,85,0.14);
+  color: var(--c-green-d);
 }
 .ex-card-file code {
   font-family: var(--font-mono);
@@ -1192,7 +1291,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .ex-card-cta {
   flex-shrink: 0;
   font-size: 12.5px;
-  color: #1f9d55;
+  color: var(--c-green);
   font-weight: 600;
   opacity: 0;
   transform: translateX(-6px);
@@ -1280,7 +1379,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: all .15s var(--ease);
 }
 .topbar-actions .ghost:hover {
-  background: var(--c-bg-soft);
+  background: var(--c-hover);
   color: var(--c-text);
   border-color: var(--c-border);
   text-decoration: none;
@@ -1302,10 +1401,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 /* 加宽侧栏后再做一点优化：滚动条隐藏 */
 .nav { scrollbar-width: thin; }
 .nav::-webkit-scrollbar { width: 6px; }
-.nav::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
+.nav::-webkit-scrollbar-thumb { background: var(--c-scroll); }
 
 /* topbar 增加细微阴影感 */
-.topbar { box-shadow: 0 1px 0 rgba(0,0,0,0.04); }
+.topbar { box-shadow: 0 1px 0 var(--c-shadow-color); }
 
 /* 课程头加一行小副标题（科技感的"代号"） */
 .course-head .meta-row {
@@ -1419,13 +1518,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   transition: all .15s var(--ease);
   text-decoration: none;
 }
-.toc-item:hover { color: var(--c-text); background: rgba(0,0,0,0.04); text-decoration: none; }
+.toc-item:hover { color: var(--c-text); background: var(--c-hover); text-decoration: none; }
 .toc-item.lvl-2 { padding-left: 14px; }
 .toc-item.lvl-3 { padding-left: 22px; font-size: 12px; color: var(--c-text-3); }
 .toc-item.active {
   color: var(--c-primary); font-weight: 600;
   border-left-color: var(--c-primary);
-  background: rgba(0,113,227,0.06);
+  background: var(--c-active-bg);
 }
 
 /* 笔记面板（更大、撑满下方空间） */
@@ -1434,8 +1533,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   align-self: start;
   height: calc(100vh - 100px);              /* 撑满屏幕高度，不再只是 max-height */
   display: flex; flex-direction: column;
-  background: linear-gradient(180deg, #fffbef, #fff);
-  border: 1px solid #f4e6b3;
+  background: var(--c-amber-bg);
+  border: 1px solid var(--c-amber-bd);
   border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(180, 130, 0, 0.06);
@@ -1444,20 +1543,20 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .notes-head {
   padding: 12px 14px;
   display: flex; justify-content: space-between; align-items: flex-start;
-  background: linear-gradient(180deg, #fff8e0, #fffbef);
-  border-bottom: 1px solid #f4e6b3;
+  background: var(--c-amber-bg-h);
+  border-bottom: 1px solid var(--c-amber-bd);
 }
 .notes-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .notes-title > span:first-child {
-  font-weight: 600; font-size: 13px; color: #92400e;
+  font-weight: 600; font-size: 13px; color: var(--c-amber-d);
   letter-spacing: -0.01em;
   display: flex; align-items: center; gap: 6px;
 }
 .notes-title > span:first-child::before {
-  content: "✎"; color: #b45309;
+  content: "✎"; color: var(--c-amber-txt);
 }
 .notes-key {
-  font-size: 10.5px; color: #b45309;
+  font-size: 10.5px; color: var(--c-amber-txt);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 220px; opacity: 0.7;
 }
@@ -1465,7 +1564,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .notes-actions .iconbtn {
   background: transparent; border: 0; cursor: pointer;
   font-size: 11px; font-family: var(--font-mono);
-  color: #92400e; padding: 3px 8px; border-radius: 6px;
+  color: var(--c-amber-d); padding: 3px 8px; border-radius: 6px;
   font-weight: 600;
 }
 .notes-actions .iconbtn:hover { background: rgba(180, 100, 0, 0.1); }
@@ -1473,17 +1572,17 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   flex: 1; min-height: 200px;
   width: 100%; resize: none; border: 0; outline: 0;
   padding: 16px 18px;
-  background: transparent; color: #1d1d1f;
+  background: transparent; color: var(--c-text);
   font-family: var(--font-mono);
   font-size: 13.5px; line-height: 1.75;
 }
-.notes-area::placeholder { color: #d6b864; }
+.notes-area::placeholder { color: var(--c-amber-txt); opacity: .55; }
 .notes-foot {
   display: flex; justify-content: space-between;
   padding: 8px 14px;
-  border-top: 1px solid #f4e6b3;
-  font-size: 11px; color: #b45309;
-  background: rgba(255, 250, 230, 0.6);
+  border-top: 1px solid var(--c-amber-bd);
+  font-size: 11px; color: var(--c-amber-txt);
+  background: transparent;
 }
 .notes-status {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1539,4 +1638,103 @@ code, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   .lecture-layout { gap: 16px; }
 }
 
+/* =========================================================================
+   深浅色主题切换按钮（topbar 右侧，胶囊图标按钮）
+   ========================================================================= */
+.theme-toggle {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  padding: 0;
+  border-radius: 980px;
+  border: 1px solid var(--c-border-2);
+  background: transparent;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
+}
+.theme-toggle:hover {
+  background: var(--c-bg-soft);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+.theme-toggle svg { width: 15px; height: 15px; display: block; }
+/* auto 模式：显示「自动」小点，提示当前跟随系统 */
+.theme-toggle .mode-dot {
+  display: none;
+  position: absolute;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--c-primary);
+  transform: translate(9px, -9px);
+}
+.theme-toggle[data-mode="auto"] .mode-dot { display: block; }
+.theme-toggle { position: relative; }
 
+/* =========================================================================
+   深色主题的局部微调（变量覆盖不到的阴影 / 渐变 / 代码高亮底色）
+   ========================================================================= */
+html[data-theme="dark"] ::selection { background: rgba(10, 132, 255, 0.34); }
+
+/* 深色下面板使用更沉的玻璃底，避免纯白卡片突兀 */
+html[data-theme="dark"] .demo-card,
+html[data-theme="dark"] .modal-card,
+html[data-theme="dark"] .ex-card,
+html[data-theme="dark"] .ex-readme {
+  border-color: var(--c-border-2);
+}
+html[data-theme="dark"] .hero-card { background: var(--c-bg-soft); }
+
+/* 代码块：atom-one-dark 主题自带底色，这里只对齐圆角与边框 */
+html[data-theme="dark"] .markdown pre,
+html[data-theme="dark"] .demo-source pre {
+  background: #1c1c1e !important;
+  border: 1px solid var(--c-border-2);
+}
+html[data-theme="dark"] .demo-source pre { border-width: 0; }
+html[data-theme="dark"] .markdown pre code,
+html[data-theme="dark"] .demo-source pre code {
+  background: transparent !important;
+  color: #d7dae0;
+}
+html[data-theme="dark"] .markdown code:not(pre code) {
+  background: var(--c-code-bg);
+  border: 1px solid var(--c-border-3);
+}
+
+/* Mermaid：mermaid 的 dark 主题自带暗底 + 浅色描边，容器跟随即可 */
+html[data-theme="dark"] .markdown .mermaid-box {
+  background: #1a1a1c;
+  border-color: var(--c-border-2);
+}
+/* 节点文字与主题的对比度由 app.js 的 fixMermaidNodeContrast 处理（只压浅底节点） */
+html[data-theme="dark"] .markdown .mermaid-box .nodeLabel { color: inherit; }
+
+/* 侧栏 / 顶栏 的玻璃质感在深色下更明显 */
+html[data-theme="dark"] .sidebar { box-shadow: inset -1px 0 0 var(--c-border-2); }
+html[data-theme="dark"] .app:not(.sidebar-pinned) .sidebar:hover {
+  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.6);
+}
+
+/* 品牌方块：深色下反过来用浅色底 */
+html[data-theme="dark"] .brand-mark { background: var(--c-text); color: #000; }
+html[data-theme="dark"] .demo-card.open .demo-head .index-chip { color: #000; }
+
+/* 笔记面板：琥珀色调在深色下降低饱和度 */
+html[data-theme="dark"] .notes { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5); }
+
+/* 练习区绿色强调色在深色下提亮，保证可读性 */
+html[data-theme="dark"] .cross-tab-jump.exercise-jump,
+html[data-theme="dark"] .ex-card-file .badge,
+html[data-theme="dark"] .ex-card-no,
+html[data-theme="dark"] .ex-banner-sub code {
+  color: var(--c-green-d);
+}
+html[data-theme="dark"] .ex-card--demo .ex-card-no,
+html[data-theme="dark"] .ex-card--demo .badge.py { color: #79b8ff; }
+html[data-theme="dark"] .ex-card--demo .ex-card-cta { color: #79b8ff; }
+
+/* Markdown 里的引用块、表格描边在深色下更克制 */
+html[data-theme="dark"] .markdown blockquote { background: var(--c-bg-soft); }
+html[data-theme="dark"] .markdown table { border-color: var(--c-border-2); }
+
+/* TOC 左侧描边 */
+html[data-theme="dark"] .toc { border-left-color: var(--c-border-2); }
