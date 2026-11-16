@@ -23,7 +23,7 @@ $:
   # 用一段醒目卡片提示"如何启动课程学习中心"。
   vscode:
     - runner:
-        cpus: 16
+        cpus: 4
       docker:
         image: docker.cnb.cool/looc/default-dev-env:latest
       env:

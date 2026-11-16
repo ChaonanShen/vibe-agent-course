@@ -1,8 +1,8 @@
 """
-Demo 21 · Agent v2：将最小 Agent Loop 接入 ContextManager + Memory
+Demo 15 · Agent v2：将最小 Agent Loop 接入 ContextManager + Memory
 ==================================================================
 
-把 第 3/4 章的朴素 Agent Loop 升级为 v2，接入第 5 章的两大组件：
+把第 2 章的朴素 Agent Loop 升级为 v2，接入本章（第 4 章）的两大组件：
 
   ① ContextManager
      —— 每轮调 LLM 前自动压缩 messages，防止上下文爆炸
@@ -18,106 +18,21 @@ Demo 21 · Agent v2：将最小 Agent Loop 接入 ContextManager + Memory
 运行方式：
     cd /workspace/04-context-and-memory/lab/
     source /workspace/.venv/bin/activate
-    python demo_16_agent_v2.py
+    python demo_15_agent_v2.py
 """
 
 from _env import get_model_id, chat
-from demo_14_context_strategies import strategy_hierarchical
-from demo_15_memory import (
+from demo_13d_context_manager import ContextManager
+from demo_14_memory import (
     Memory,
     MemoryEntry,
     embed,
     cosine,
 )
 
-
-# ============================================================
-# ContextManager：把 demo_14 的策略包成一个类
-# ============================================================
-class ContextManager:
-    """对话上下文管理器，负责控制上下文窗口大小并执行分层压缩策略。
-
-    当对话消息累积过多，超出模型上下文窗口上限时，需要对历史消息进行压缩。
-    本类封装了"何时压缩"的判断逻辑和"如何压缩"的压缩策略，
-    使调用方无需关心底层细节。
-
-    核心策略（分层）：
-        1. 系统提示词（role="system"）始终保留，不参与压缩。
-        2. 用户硬约束 / 关键事实单独抽提，以独立 system 消息前置注入。
-        3. 距离当前最近的 `keep_last` 条消息保留原文，保证即时对话质量。
-        4. 超出 `keep_last` 范围的早期消息触发 LLM 摘要压缩，
-           用简短摘要替代原始冗长历史。
-
-    Attributes:
-        keep_last (int): 压缩时保留的最近消息条数，这些消息不会被摘要化。
-        max_messages (int): 触发压缩的阈值，当消息总数超过此值时会启动压缩流程。
-
-    Note:
-        - 实际压缩逻辑委托给外部函数 `strategy_hierarchical`，
-          本类只作为配置容器和门面（Facade）。
-        - 压缩阈值应小于模型真实上下文上限，为当前轮次的新消息留出空间。
-
-    Example:
-        >>> ctx = ContextManager(keep_last=4, max_messages=15)
-        >>> if ctx.should_compress(messages):
-        ...     messages = ctx.compress(messages)
-    """
-
-    def __init__(self, keep_last: int = 6, max_messages: int = 20) -> None:
-        """初始化上下文管理器。
-
-        Args:
-            keep_last: 压缩时保留的最近消息条数，默认 6 条。
-                值越小，压缩越激进，能节省越多 token，但可能丢失细节。
-            max_messages: 触发压缩的消息总数阈值，默认 20 条。
-                当消息列表长度超过此值时，`should_compress()` 返回 True。
-        """
-        self._keep_last = keep_last if keep_last > 0 else 6
-        self._max_messages = max_messages if max_messages > 0 else 20
-
-    @property
-    def keep_last(self) -> int:
-        return self._keep_last
-
-    @property
-    def max_messages(self) -> int:
-        return self._max_messages
-
-    def should_compress(self, messages: list[dict]) -> bool:
-        """判断当前消息列表是否需要压缩。
-
-        检查逻辑简单直观：当消息总数超过 `max_messages` 阈值时返回 True。
-
-        Args:
-            messages: 完整的消息列表，每条消息为 `{"role": str, "content": str}` 格式。
-
-        Returns:
-            True 表示需要调用 `compress()` 进行压缩，False 表示无需操作。
-
-        Example:
-            >>> ctx = ContextManager(max_messages=10)
-            >>> ctx.should_compress([{"role": "user", "content": "hi"}])
-            False
-        """
-        return len(messages) > self.max_messages
-
-    def compress(self, messages: list[dict]) -> list[dict]:
-        """对消息列表执行分层压缩，返回压缩后的消息列表。
-
-        压缩策略由 `strategy_hierarchical` 函数 实现。
-
-        Args:
-            messages: 待压缩的完整消息列表。调用方应确保传入的是当前对话的
-                全部消息（含 system prompt），而非部分切片。
-
-        Returns:
-            压缩后的消息列表，长度和内容均可能发生变化。
-            返回值可直接作为新的消息列表继续使用。
-
-        Note:
-            此方法不修改传入的 `messages`（幂等），返回值是新列表。
-        """
-        return strategy_hierarchical(messages, keep_last=self.keep_last)
+# ContextManager 的完整实现见 demo_13d_context_manager.py（第 13 节的最终产出）：
+# 它不只是"把分层策略包一层"，而是统一处理"何时压缩（防爆炸）+ 怎么压缩（防变笨）
+# + 尽量少压缩（保缓存命中率）"这三件事，这里直接复用，不重复定义。
 
 
 class MemoryV2(Memory):
@@ -312,13 +227,15 @@ class AgentV2:
     Attributes:
         system_prompt: 系统提示词（只读，初始化后不可修改）。
         memory: 长期记忆存储，提供语义搜索与事实存取。
-        ctx: 上下文管理器，负责消息列表的压缩策略。
-        messages: 当前会话的消息历史（首条为 system prompt）。
+        ctx: 上下文管理器，统一持有并管理当前会话的 messages（含压缩策略）。
+        messages: 当前会话的消息历史（只读属性，底层读自 `self.ctx.messages()`）。
 
     Note:
-        `system_prompt` 是只读属性，内部存储为 `_system_prompt`，
-        且 `chat` 函数构建注入消息时直接复用 `self.messages[0]`，
-        确保两处始终一致。
+        `system_prompt` 是只读属性，内部存储为 `_system_prompt`。
+        会话历史不再由 `AgentV2` 自己维护一份列表，而是全权交给 `self.ctx`
+        （`ContextManager`）持有——`AgentV2` 只通过 `ctx.add_messages()` 写入、
+        `ctx.messages()` 读取，这样压缩判断和历史状态始终绑在一起，不会出现
+        "压缩只作用于临时拼装的列表，真正保存的历史却从不压缩"这类不一致。
 
     Examples:
         >>> agent = AgentV2(system_prompt="你是旅行规划师。")
@@ -347,30 +264,34 @@ class AgentV2:
         self._system_prompt = system_prompt
         self.memory = memory or MemoryV2()
         self.ctx = ctx_manager or ContextManager()
-        self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        self.ctx.add_messages({"role": "system", "content": system_prompt})
 
     @property
     def system_prompt(self) -> str:
         """只读的系统提示词。
 
-        外部可读取，但不可修改，防止与 `self.messages[0]["content"]` 不一致。
+        外部可读取，但不可修改，防止与会话历史里的 system 消息不一致。
         """
         return self._system_prompt
+
+    @property
+    def messages(self) -> list[dict]:
+        """当前会话的完整消息历史，实际读自 `self.ctx.messages()`
+        （可能已经过 `ContextManager` 压缩）。"""
+        return self.ctx.messages()
 
     def chat(self, user_input: str) -> tuple[str, int, int]:
         """处理一轮用户对话，返回模型回复及 token 消耗统计。
 
-        处理流程（共 5 步）：
+        处理流程（共 4 步）：
 
         1. 记忆召回 — 用 `user_input` 检索 Memory，将相似度 > 0.5
-           的事实临时注入 system prompt（仅本轮有效，不写入 `self.messages`）。
-        2. 构建消息列表 — 构造 `injected` 列表用于调 LLM，
-           若触发了记忆召回则注入额外 system 消息。
-        3. 上下文压缩 — 若消息数超过阈值，调用 ContextManager 压缩，
-           压缩结果同样仅作用于本轮。
-        4. 调用 LLM — 以 `temperature=0.3` 获取回复。
-        5. 写回历史 — 将用户输入和助手回复追加到 `self.messages`，
-           供后续轮次使用（不含临时注入的记忆消息）。
+           的事实临时注入 system prompt（仅本轮有效，不写入历史）。
+        2. 构建消息列表 — 从 `self.ctx.messages()` 读出当前历史，
+           若触发了记忆召回则注入额外 system 消息，再拼上本轮用户输入。
+        3. 调用 LLM — 以 `temperature=0.3` 获取回复。
+        4. 写回历史 — 把用户输入和助手回复一起交给 `self.ctx.add_messages()`
+           持久化（不含临时注入的记忆消息），压缩判断在这一步内部自动完成。
 
         Args:
             user_input: 用户本轮输入的文本。
@@ -381,7 +302,8 @@ class AgentV2:
             - `prompt_tokens`: 本轮 prompt 消耗的 token 数（含系统、历史与记忆）。
             - `total_tokens`: 本轮总 token 消耗（prompt + completion）。
         """
-        injected = list(self.messages)
+        history = self.ctx.messages()
+
         # 1. 用 user_input 去 Memory 召回相关长期事实
         relevant = [(score, e) for score, e in self.memory.search(user_input, k=3) if score > 0.5]
         if relevant:
@@ -389,16 +311,13 @@ class AgentV2:
             injected = [
                 {"role": "system", "content": self.system_prompt},
                 {"role": "system", "content": f"[相关长期事实]\n{facts_block}"},
-            ] + [m for m in self.messages[1:] if m["role"] != "system"]
+            ] + [m for m in history[1:] if m["role"] != "system"]
+        else:
+            injected = list(history)
 
         injected.append({"role": "user", "content": user_input})
 
-        # 3. 检查是否需要压缩
-        if self.ctx.should_compress(injected):
-            print(f"  ⚙️  消息超过 {self.ctx.max_messages} 条，触发压缩")
-            injected = self.ctx.compress(injected)
-
-        # 4. 调 LLM（chat 函数内部强制流式，适配接口限制）
+        # 3. 调 LLM（chat 函数内部强制流式，适配接口限制）
         msg = chat(
             messages=injected,
             temperature=0.3,
@@ -408,9 +327,14 @@ class AgentV2:
         reply = msg.content or ""
         usage = msg.usage
 
-        # 5. 写回 messages（不含临时注入的那一条）
-        self.messages.append({"role": "user", "content": user_input})
-        self.messages.append({"role": "assistant", "content": reply})
+        # 4. 写回历史（不含临时注入的那条记忆消息）——交给 ContextManager
+        #    统一管理，压缩判断在 add_messages 内部自动完成
+        self.ctx.add_messages(
+            {"role": "user", "content": user_input},
+            {"role": "assistant", "content": reply},
+        )
+        if self.ctx.last_compressed:
+            print(f"  ⚙️  消息超过 {self.ctx.max_messages} 条，触发压缩")
 
         prompt_tk = usage.prompt_tokens if usage else 0
         total_tk = usage.total_tokens if usage else 0

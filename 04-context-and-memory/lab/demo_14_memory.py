@@ -1,8 +1,8 @@
 """
-Demo 20 · Memory：用 embedding API 做语义检索
+Demo 14 · Memory：用 embedding API 做语义检索
 ============================================
 
-配套：第 15 节《记忆系统：短期 / 长期 / 工作记忆》
+配套：第 14 节《记忆系统：短期 / 长期 / 工作记忆》
 
 Memory 与 ContextManager 的分工：
   - ContextManager：管理"本次对话的 messages 列表"（短期 + 工作记忆）
@@ -17,7 +17,7 @@ Memory 与 ContextManager 的分工：
 运行方式：
     cd /workspace/04-context-and-memory/lab/
     source /workspace/.venv/bin/activate
-    python demo_15_memory.py
+    python demo_14_memory.py
 """
 
 import json
