@@ -15,7 +15,7 @@ Memory 不发明任何新机制，它只做"门面"，收口两件最容易写�
      `commit_session()` 一次把两层都写了：
        · Profile 覆盖更新（抽字段 → 单值覆盖 / 多值并集）
        · History 追加一条本次会话摘要（embed 入库）
-     调用方不用再记得"先更 profile、再 add_session"。
+     调用方不用再记得"先更 profile、再 commit_session"。
 
   2. 持久化统一
      `save()` / `load()` 一次搞定两层，底层仍是两个物理文件：
@@ -104,13 +104,13 @@ class Memory:
         """会话结束时一次写回两层：Profile 覆盖更新 + History 追加一条摘要。
 
         这正是门面的意义——两层写入时机本就一致（会话结束），调用方只需一句
-        `memory.commit_session(...)`，不必记得先更 profile 再 add_session。
+        `memory.commit_session(...)`，不必记得先更 profile 再 commit_session。
 
         Returns:
             `(profile_delta, history_summary)`，仅用于演示打印看清写了什么。
         """
         delta = self.profile.commit_session(messages)
-        summary = self.history.add_session(messages)
+        summary = self.history.commit_session(messages)
         return delta, summary
 
     # ---------- 持久化：两层一起 ----------
