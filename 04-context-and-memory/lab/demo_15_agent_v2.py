@@ -259,7 +259,7 @@ class AgentV2:
             memory: 长期记忆实例。传 `None` 时自动创建空的 `MemoryV2()`
                 （带去重能力）。可传入 `Memory` 实例以获得无去重的原始行为。
             ctx_manager: 上下文压缩管理器。传 `None` 时使用默认
-                `ContextManager(keep_last=6, max_messages=20)`。
+                `ContextManager(keep_last=6, max_tokens=2000)`。
         """
         self._system_prompt = system_prompt
         self.memory = memory or MemoryV2()
@@ -334,7 +334,7 @@ class AgentV2:
             {"role": "assistant", "content": reply},
         )
         if self.ctx.last_compressed:
-            print(f"  ⚙️  消息超过 {self.ctx.max_messages} 条，触发压缩")
+            print(f"  ⚙️  上下文估算超过 {self.ctx.max_tokens:,} tokens，触发压缩")
 
         prompt_tk = usage.prompt_tokens if usage else 0
         total_tk = usage.total_tokens if usage else 0

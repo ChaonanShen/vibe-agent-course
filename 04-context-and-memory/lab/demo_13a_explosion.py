@@ -46,9 +46,28 @@ def _print_row(widths: list[int], values: list[str]) -> None:
 # ============================================================
 # 上下文爆炸 —— 多轮对话里 prompt_tokens 是怎么涨起来的
 # ============================================================
+# 下面这三个常量是整节 13 的**共同案例**：13a 用它跑出"爆炸"，13b 在同一段
+# 对话、同一套脚本上演示三种治理方法，13d 封装成 ContextManager；至于压缩为什么会
+# 把缓存命中率打断，见讲义第 1 节的"前缀缓存三条规则"。
+#
+# 首轮 user 消息里顺带写了两条业务约束（过敏人群、成本上限），
+# 让 demo_13b 里"分层策略把关键事实单独抽出来"这一步有真实素材可抽。
+SYSTEM_PROMPT = "你是一个资深产品顾问，帮用户打磨一个新产品创意。"
+OPENING_USER = (
+    "我们在讨论一个随身空气质量监测器的创意，目标用户对花粉过敏，"
+    "成本要控制在 200 元以内，先给点初步建议。"
+)
 # 每一轮都发同样的指令：这正是真实场景里最常见的模式——
 # 用户不断追问、模型不断回答，但没有人主动清理历史。
 FOLLOW_UP_INSTRUCTION = "请用 2-3 句话总结一下我们目前讨论的内容，并补充 3 条新的建议。"
+
+
+def build_conversation() -> list[dict]:
+    """13a / 13b / 13d 共用的开场 messages——同一段对话，同一个脚本。"""
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": OPENING_USER},
+    ]
 
 
 def run_context_explosion(n_rounds: int = 20) -> list[dict]:
@@ -66,10 +85,7 @@ def run_context_explosion(n_rounds: int = 20) -> list[dict]:
     缓存命中率越高，说明"重复发送的历史"被识别出来了，计费/延迟上会打折，
     但注意：这不代表 token 总量不再增长，窗口占用依然在持续膨胀。
     """
-    messages = [
-        {"role": "system", "content": "你是一个资深产品顾问，帮用户打磨一个新产品创意。"},
-        {"role": "user", "content": "我们在讨论一个随身空气质量监测器的创意，先给点初步建议。"},
-    ]
+    messages = build_conversation()
 
     widths = [4, 13, 13, 8, 10, 10, 12]
     _print_row(
