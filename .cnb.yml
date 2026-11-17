@@ -39,6 +39,7 @@ $:
         - name: uv sync
           script: |
             cd /workspace && uv sync --all-packages
+            npx skills add https://cnb.cool/cnb/skills/cnb-skill.git -g -y
 
 # ---- 默认分支推送：构建并推送镜像 ----
 main:
