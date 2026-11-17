@@ -119,7 +119,7 @@ class History:
         if summary:
             self._entries.append(SessionEntry(summary=summary, vec=embed(summary)))
 
-    def add_session(self, messages: list[dict]) -> str:
+    def commit_session(self, messages: list[dict]) -> str:
         """会话结束时调用：先用 LLM 把整段对话压成一条要点，再 embed 入库。
 
         存摘要而非逐轮原文：省空间、召回更干净（一次会话 = 一个检索单位）。

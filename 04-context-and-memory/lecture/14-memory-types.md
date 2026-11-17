@@ -43,7 +43,7 @@ flowchart TD
 不是把每一轮原文都塞进去（噪声多、库膨胀快），而是**一次会话 = 一条摘要**：会话结束用 LLM 压成一句要点，再存进库里。
 
 ```python
-def add_session(self, messages):
+def commit_session(self, messages):
     summary = llm.summarize(messages)      # 一次会话 → 一句要点
     self._store.append((summary, embed(summary)))   # 连同它的向量一起存
 ```
@@ -251,7 +251,7 @@ flowchart TD
 system = BASE + render(history.search(question, k=3)) + profile.profile_card()
 
 # 对话后：两层各写各的
-history.add_session(session)                # 追加一条摘要
+history.commit_session(session)                # 追加一条摘要
 profile.commit_session(session)   # 覆盖更新
 ```
 
@@ -294,7 +294,7 @@ class Memory:
     def commit_session(self, messages: list[dict]) -> tuple[dict, str]:
         """会话结束时一次写回两层：Profile 覆盖更新 + History 追加一条摘要。"""
         delta = self.profile.commit_session(messages)
-        summary = self.history.add_session(messages)
+        summary = self.history.commit_session(messages)
         return delta, summary
 
     # ---------- 持久化：两层一起 ----------
@@ -314,7 +314,7 @@ class Memory:
 
 | 门面收口的事 | 为什么收口 |
 |---|---|
-| `commit_session()` 一次写两层 | 两层写入时机本就一致（会话结束），调用方不必记得"先更 Profile 再 add_session" |
+| `commit_session()` 一次写两层 | 两层写入时机本就一致（会话结束），调用方不必记得"先更 Profile 再 commit_session" |
 | `save()` / `load()` 一次落盘/还原两层 | 避免两层持久化不同步 |
 | 读取接口**不**统一（`profile_card` vs `search`） | 数据形态不同、检索策略就不同——这是本章主线，不能为了"看起来整齐"抹掉 |
 
