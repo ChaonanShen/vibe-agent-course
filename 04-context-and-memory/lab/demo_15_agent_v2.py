@@ -1,19 +1,25 @@
 """
-Demo 15 · Agent v2：将最小 Agent Loop 接入 ContextManager + Memory
-==================================================================
+Demo 15 · Agent v2：把最小 Agent Loop 接入 ContextManager + 两层记忆
+=====================================================================
 
-把第 2 章的朴素 Agent Loop 升级为 v2，接入本章（第 4 章）的两大组件：
+把第 2 章的朴素 Agent Loop 升级为 v2，接入本章（第 4 章）两个现成组件：
 
-  ① ContextManager
-     —— 每轮调 LLM 前自动压缩 messages，防止上下文爆炸
+  ① ContextManager（第 13 节·产出类 demo_13d）
+     —— 每轮调 LLM 前按 token 阈值自动压缩 messages，防止上下文爆炸
 
-  ② Memory
-     —— 每轮自动召回相关长期事实，注入 system prompt
-     —— 对话结束时由 LLM 提炼关键事实，写入长期记忆
+  ② Memory（第 14 节·产出类 demo_14c）
+     —— 两层长期记忆的统一门面，对内 Profile + History 各司其职：
+        · Profile 档案卡：结构化稳定事实，整卡注入 system（memory.profile_card）
+        · 历史会话向量库：按 user_input 语义召回往期摘要（memory.search）
+        · 会话结束一句 memory.commit_session() 同时写回两层
 
-跑 12 轮旅行规划任务，直观对比：
-  - v1 朴素 Agent 与 v2 Agent 的 token 消耗差异
-  - 关键事实（早期透露的过敏 / 预算）在 Memory 加持下是否被保住
+AgentV2 自己不再分别拿着 profile、history 两个对象来回编排——它只持有一个
+ContextManager 和一个 Memory，正是"把能力沉淀成可复用组件"的意义。
+
+跑一段多轮旅行规划，直观看到：
+  - ContextManager 在第几轮触发压缩
+  - Profile 里的稳定偏好与关键事实（过敏 / 预算）每轮都在，不会被压缩冲掉
+  - 历史会话召回把"相关的往期上下文"按需捞回来
 
 运行方式：
     cd /workspace/04-context-and-memory/lab/
@@ -21,228 +27,49 @@ Demo 15 · Agent v2：将最小 Agent Loop 接入 ContextManager + Memory
     python demo_15_agent_v2.py
 """
 
-from _env import get_model_id, chat
+from _env import chat, get_model_id
 from demo_13d_context_manager import ContextManager
-from demo_14_memory import (
-    Memory,
-    MemoryEntry,
-    embed,
-    cosine,
-)
+from demo_14b_profile import Profile
+from demo_14c_memory import Memory
 
-# ContextManager 的完整实现见 demo_13d_context_manager.py（第 13 节的最终产出）：
-# 它不只是"把分层策略包一层"，而是统一处理"何时压缩（防爆炸）+ 怎么压缩（防变笨）
-# + 尽量少压缩（保缓存命中率）"这三件事，这里直接复用，不重复定义。
-
-
-class MemoryV2(Memory):
-    """生产增强版记忆库，在 `Memory` 基础上增加了去重能力。
-
-    与父类 `Memory` 的唯一区别在于 `add` 方法：`Memory.add` 直接追加条目，不做任何
-    去重检查；而 `MemoryV2.add` 在写入前会先执行精确匹配和语义相似度双重去重，
-    避免记忆库中出现重复或高度冗余的条目。
-
-    去重策略（三步）：
-        1. 精确文本匹配：若新文本与已有记忆的文本完全一致则直接跳过；
-        2. 语义相似度检查：计算新文本与所有已有记忆的余弦相似度，
-           若最高相似度超过阈值（默认 0.92），则用新文本替换最相似的那条记忆
-           （而非简单跳过），因为新文本通常更完整或更准确；
-        3. 正常添加：若以上两步均未命中，则作为全新记忆条目追加。
-
-    适用场景：
-        - 长期运行的 Agent，记忆会随时间累积，需要防止膨胀；
-        - 多次调用 `distill_to_memory` 时，LLM 可能提炼出语义相似的事实；
-        - 用户反复表达相同意图但措辞不同的场景。
-
-    Note:
-        语义去重阈值 0.92 为经验值，可根据业务场景调整。阈值越高越严格（容忍的
-        相似度范围越窄），阈值越低则越容易将"不同但有关联"的记忆误判为重复。
-
-    Example:
-        >>> mem = MemoryV2()
-        >>> mem.add("我每天预算 500 元。")
-        >>> mem.add("我每天预算 500 元。")           # 精确重复，跳过
-        >>> mem.add("我的日常预算是 500 块。")       # 语义重复，更新旧条目
-        >>> len(mem.entries)
-        1
-    """
-
-    def add(self, text: str, **meta) -> None:
-        """添加一条新记忆到记忆库中（带去重检查）。
-
-        先将文本编码为向量，然后依次执行精确文本匹配和语义相似度双重去重，
-        确认不是重复记忆后再写入。具体逻辑与父类 `Memory.add` 的差异见下方 Note。
-
-        Args:
-            text: 要存储的记忆文本内容，通常来源于 LLM 从对话中提炼的事实。
-            **meta: 可选的附加元数据，会存入 MemoryEntry.meta 字典中。
-                例如 `category="budget"`、`priority=1` 等。
-
-        Note:
-            与 `Memory.add` 的核心差异：
-
-            - 精确去重：若已有记忆的 `text` 与参数完全相同，则跳过不写入；
-            - 语义去重：将新文本与所有已有记忆逐一计算余弦相似度，若存在
-              相似度 > 0.92 的条目，则用新文本替换该条目（而非追加），
-              以保证记忆库中始终保留最新版本的表述；
-            - 无重复时追加：若以上两步均未命中，行为与 `Memory.add` 一致，
-              直接追加新条目。
-
-            另外，`Memory.add` 不做去重（用于教学演示最简实现），而 `MemoryV2.add`
-            面向生产场景，适合记忆持续累积的长期运行 Agent。
-
-        Example:
-            >>> mem = MemoryV2()
-            >>> mem.add("用户偏好靠窗座位。", category="seating")
-            >>> mem.add("用户偏好靠窗座位。")  # 精确重复，跳过
-            >>> mem.add("用户喜欢坐窗边。")    # 语义相似 > 0.92，更新旧条目
-        """
-        # ① 精确文本匹配：文本完全相同则跳过
-        for entry in self._entries:
-            if entry.text == text:
-                return
-
-        v = embed(text)
-
-        # ② 语义相似度检查：计算与所有已有记忆的余弦相似度
-        if self._entries:
-            similarities = [cosine(v, e.vec) for e in self._entries]
-            max_sim = max(similarities)
-            if max_sim > 0.92:
-                # ③ 去重命中：用新文本替换相似度最高的旧条目
-                # 新文本通常更完整或更准确，因此选择"替换"而非"跳过"
-                print(f"🔄 检测到高相似度记忆（{max_sim:.3f}），更新现有条目")
-                max_idx = similarities.index(max_sim)
-                self._entries[max_idx] = MemoryEntry(text=text, vec=v, meta=meta)
-                return
-
-        # ④ 无重复，正常追加
-        self._entries.append(MemoryEntry(text=text, vec=v, meta=meta))
-        return
-
-
-# ============================================================
-# Memory 提炼：用 LLM 从对话里提炼"值得长期记的事实"
-# ============================================================
-DISTILL_PROMPT = """阅读下面的对话，提炼出**值得长期记住的用户偏好、约束、关键事实**，
-每条一行，不要把一次性的问答内容也存进去。
-如果没有可记的事实，输出空。
-
-对话：
-{transcript}
-
-# 输出格式
-每行一条事实，纯文本，无序号
-"""
-
-
-def distill_to_memory(messages: list[dict], memory: Memory) -> None:
-    """将完整对话记录提炼为长期事实，并写入 Memory 持久化存储。
-
-    本函数在「对话会话结束时」调用，利用 LLM 从本轮对话中自动抽取
-    值得跨会话保留的用户偏好、硬性约束和关键事实，
-    避免人工整理记忆，实现记忆的自动化沉淀。
-
-    处理流程（共 4 步）：
-      1. 构建对话抄本（transcript）：过滤掉 system 消息（避免将系统提示词
-         误当作对话内容），将剩余消息拼接为 `role: content` 格式的文本。
-      2. 调用 LLM 提炼：将抄本填入 `DISTILL_PROMPT` 模板，以 `temperature=0`
-         调用 LLM，要求输出纯文本事实列表（每行一条）。
-      3. 清洗 LLM 输出：对返回文本按行拆分，去除空行，
-         并去除每行开头可能存在的 `- ` 列表符号及首尾空白。
-      4. 写入 Memory：遍历清洗后的事实列表，逐条调用 `memory.add()`
-         持久化。若传入的是 `MemoryV2` 实例，`add()` 会自动做精确匹配
-         和语义相似度双重去重，避免重复条目；若传入的是 `Memory` 实例，
-         则不做去重，多次提炼相同事实会产生重复。
-
-    Args:
-        messages: 完整对话消息列表，通常来自 `agent.messages`。
-            列表元素为 `{"role": str, "content": str}` 格式的字典。
-            函数内部会自动过滤 `role == "system"` 的消息，
-            仅将用户与助手的对话内容提供给 LLM 进行提炼。
-        memory: 长期记忆实例（`Memory` 或其子类如 `MemoryV2`），
-            用于持久化存储提炼后的事实。函数会直接修改该实例
-            （调用 `memory.add()`），调用方无需额外处理返回值
-            即可获得更新后的记忆。推荐传入 `MemoryV2` 以获得自动去重能力。
-
-    Note:
-        - LLM 调用参数 `temperature=0` 确保输出确定性，
-          避免同一次对话提炼出不同结果。
-        - `max_tokens=300` 限制提炼输出长度，防止单次提炼消耗过多 token。
-        - 清洗逻辑 `line.strip("- ").strip()` 可同时处理
-          `- 事实内容`` 和 ``事实内容` 两种 LLM 输出格式。
-        - `Memory.add()` 不做去重，若传入的是 `Memory` 实例且多次调用
-          `distill_to_memory`（或手动多次 `add()` 同一内容），
-          `memory.entries` 中会出现重复条目。若传入的是 `MemoryV2` 实例，
-          则 `add()` 内置精确匹配 + 语义相似度双重去重，可有效避免重复。
-
-    Example:
-        >>> memory = Memory()
-        >>> msgs = [
-        ...     {"role": "system", "content": "你是个助手。"},
-        ...     {"role": "user", "content": "我对坚果过敏。"},
-        ...     {"role": "assistant", "content": "好的，已记录。"},
-        ... ]
-        >>> distill_to_memory(msgs, memory)
-        >>> print(len(memory.entries) > 0)
-        True
-    """
-    # 第 1 步：构建对话抄本，过滤 system 消息，避免将系统提示词送入 LLM
-    transcript = "\n".join(
-        f"{m['role']}: {m['content']}" for m in messages if m["role"] != "system"
-    )
-
-    # 第 2 步：调用 LLM，将对话抄本填入模板，请求提炼长期事实
-    msg = chat(
-        messages=[{"role": "user", "content": DISTILL_PROMPT.format(transcript=transcript)}],
-        temperature=0,       # 零温度，确保输出稳定可复现
-        max_tokens=300,      # 限制输出长度，控制 token 消耗
-    )
-
-    # 第 3 步：清洗 LLM 输出，按行拆分并去除空白行和列表符号
-    raw = msg.content or ""
-    facts = [line.strip("- ").strip() for line in raw.splitlines() if line.strip()]
-
-    # 第 4 步：将提炼出的事实逐条写入 Memory
-    # 注意：若 memory 是 MemoryV2 实例，add() 会自动去重；
-    #       若 memory 是 Memory 实例，则不做去重，可能产生重复条目。
-    for f in facts:
-        memory.add(f)
-    return
+# ContextManager 的完整实现见 demo_13d_context_manager.py（第 13 节的产出）：
+# 它统一处理"何时压缩（防爆炸）+ 怎么压缩（防变笨）+ 尽量少压缩（保缓存命中率）"
+# 三件事。Memory 见 demo_14c_memory.py（第 14 节的产出）：它把两层记忆
+# （Profile 档案卡 + 历史会话向量库）封装成统一门面。AgentV2 直接复用这两个组件。
 
 
 # ============================================================
 # Agent v2：组合 ContextManager + Memory
 # ============================================================
 class AgentV2:
-    """增强版 Agent，整合了上下文压缩与长期记忆能力。
+    """增强版 Agent，整合上下文压缩与两层长期记忆。
 
-    相比第 4 章的朴素 Agent Loop，v2 新增以下能力：
+    相比第 2 章的朴素 Agent Loop，v2 新增两件事：
 
-    1. 上下文压缩：当消息列表超过阈值时，通过 ContextManager 自动压缩
-       （截断 / 摘要 / 分层），避免 token 浪费。
-    2. 记忆召回：每轮对话前，用用户输入检索 Memory 中的相关长期事实，
-       将高置信度结果临时注入 system prompt，帮助模型"回忆"跨轮次信息。
+    1. 上下文压缩：messages 超 token 阈值时由 ContextManager 自动压缩，
+       避免上下文爆炸（第 13 节产出组件）。
+    2. 长期记忆：持有一个 Memory（第 14 节产出组件），它内部管着两层——
+       · Profile 整卡注入 system，让稳定偏好与关键事实每轮一致生效、永不漏召回；
+       · 历史会话按 user_input 语义召回相关往期摘要，临时注入 system。
+
+    读写分工：
+        - 对话前（读）：memory.profile_card() 整卡注入 + memory.search() 召回 top-k；
+        - 对话后（写）：见 `end_session()`——一句 memory.commit_session()
+          同时写回两层（Profile 覆盖、History 追加摘要），数据源是未经压缩的
+          会话原文 `self._session_log`，而非 ctx 压缩后的历史；
+        - 会话历史全权交给 `self.ctx`（ContextManager）持有，AgentV2 只通过
+          `ctx.add_messages()` 写、`ctx.messages()` 读，压缩判断和历史状态始终绑定。
+
+    为什么要额外留一份 `_session_log`：
+        ctx.messages() 是"发给模型的上下文"，会被压缩（早期 user 原文被摘要冲掉）；
+        而长期记忆写回要基于"本次会话的完整原话"。两者数据源不同，必须分开持有，
+        否则预算 5000 这类早期关键事实会在压缩后被抽取不到，Profile 更新就漏了。
 
     Attributes:
-        system_prompt: 系统提示词（只读，初始化后不可修改）。
-        memory: 长期记忆存储，提供语义搜索与事实存取。
-        ctx: 上下文管理器，统一持有并管理当前会话的 messages（含压缩策略）。
-        messages: 当前会话的消息历史（只读属性，底层读自 `self.ctx.messages()`）。
-
-    Note:
-        `system_prompt` 是只读属性，内部存储为 `_system_prompt`。
-        会话历史不再由 `AgentV2` 自己维护一份列表，而是全权交给 `self.ctx`
-        （`ContextManager`）持有——`AgentV2` 只通过 `ctx.add_messages()` 写入、
-        `ctx.messages()` 读取，这样压缩判断和历史状态始终绑在一起，不会出现
-        "压缩只作用于临时拼装的列表，真正保存的历史却从不压缩"这类不一致。
-
-    Examples:
-        >>> agent = AgentV2(system_prompt="你是旅行规划师。")
-        >>> agent.memory.add("用户对花粉过敏。")
-        >>> reply, prompt_tk, total_tk = agent.chat("推荐户外活动")
-        >>> print(reply)
-        '建议选择室内场所，因为您对花粉过敏……'
+        system_prompt: 系统提示词（只读）。
+        memory: 两层长期记忆门面（Profile + 历史会话）。
+        ctx: 上下文管理器，持有并压缩当前会话 messages。
+        messages: 当前会话消息历史（只读，读自 `self.ctx.messages()`）。
     """
 
     def __init__(
@@ -251,73 +78,71 @@ class AgentV2:
         memory: Memory | None = None,
         ctx_manager: ContextManager | None = None,
     ) -> None:
-        """初始化 AgentV2 实例。
+        """初始化 AgentV2。
 
         Args:
             system_prompt: 系统提示词，决定 Agent 的角色与行为准则。
-                默认值：`"你是一个有用的助手。"`
-            memory: 长期记忆实例。传 `None` 时自动创建空的 `MemoryV2()`
-                （带去重能力）。可传入 `Memory` 实例以获得无去重的原始行为。
-            ctx_manager: 上下文压缩管理器。传 `None` 时使用默认
+            memory: 两层长期记忆门面，传 `None` 时新建空 `Memory()`。
+            ctx_manager: 上下文压缩管理器，传 `None` 时用默认
                 `ContextManager(keep_last=6, max_tokens=2000)`。
         """
         self._system_prompt = system_prompt
-        self.memory = memory or MemoryV2()
+        self.memory = memory or Memory()
         self.ctx = ctx_manager or ContextManager()
         self.ctx.add_messages({"role": "system", "content": system_prompt})
+        # 本次会话的完整原文，专供会话结束时抽取长期记忆用。
+        # 必须和 self.ctx 分开：ctx 里的历史会被压缩（早期 user 原文会被摘要冲掉），
+        # 而 Profile/History 写回要基于「本次说过的原话」，不能用压缩后的残缺上下文。
+        self._session_log: list[dict] = []
 
     @property
     def system_prompt(self) -> str:
-        """只读的系统提示词。
-
-        外部可读取，但不可修改，防止与会话历史里的 system 消息不一致。
-        """
+        """只读系统提示词，防止与历史里的 system 消息不一致。"""
         return self._system_prompt
 
     @property
     def messages(self) -> list[dict]:
-        """当前会话的完整消息历史，实际读自 `self.ctx.messages()`
-        （可能已经过 `ContextManager` 压缩）。"""
+        """当前会话消息历史，读自 `self.ctx.messages()`（可能已被压缩）。"""
         return self.ctx.messages()
 
+    def _build_system(self, user_input: str) -> str:
+        """拼这一轮注入的 system：角色 + Profile 整卡 + 召回的历史会话。
+
+        两层读法不同，正好对应 Memory 暴露的两个方法：
+        - Profile：memory.profile_card() 整卡注入，不检索（它该一直生效）；
+        - 历史会话：memory.search() 按当前问题召回 top-k，过滤相似度 < 0.5 的噪声。
+        """
+        blocks = [self.system_prompt]
+
+        card = self.memory.profile_card()
+        if card and card != "（档案卡为空）":
+            blocks.append(f"【用户档案卡（稳定偏好与约束，务必遵守）】\n{card}")
+
+        recalled = [(s, e) for s, e in self.memory.search(user_input, k=3) if s > 0.5]
+        if recalled:
+            block = "\n".join(f"- {e.summary}" for _, e in recalled)
+            blocks.append(f"【相关的历史会话（仅供参考）】\n{block}")
+
+        return "\n\n".join(blocks)
+
     def chat(self, user_input: str) -> tuple[str, int, int]:
-        """处理一轮用户对话，返回模型回复及 token 消耗统计。
+        """处理一轮对话，返回 `(reply, prompt_tokens, total_tokens)`。
 
-        处理流程（共 4 步）：
-
-        1. 记忆召回 — 用 `user_input` 检索 Memory，将相似度 > 0.5
-           的事实临时注入 system prompt（仅本轮有效，不写入历史）。
-        2. 构建消息列表 — 从 `self.ctx.messages()` 读出当前历史，
-           若触发了记忆召回则注入额外 system 消息，再拼上本轮用户输入。
-        3. 调用 LLM — 以 `temperature=0.3` 获取回复。
-        4. 写回历史 — 把用户输入和助手回复一起交给 `self.ctx.add_messages()`
-           持久化（不含临时注入的记忆消息），压缩判断在这一步内部自动完成。
-
-        Args:
-            user_input: 用户本轮输入的文本。
-
-        Returns:
-            三元组 `(reply, prompt_tokens, total_tokens)`：
-            - `reply`: 模型回复文本（可能为空字符串）。
-            - `prompt_tokens`: 本轮 prompt 消耗的 token 数（含系统、历史与记忆）。
-            - `total_tokens`: 本轮总 token 消耗（prompt + completion）。
+        流程：
+          1. 读历史（self.ctx.messages()）；
+          2. 把 Profile 整卡 + 召回的历史会话拼进 system（仅本轮有效，不写入历史）；
+          3. 调 LLM；
+          4. 只把 user / assistant 原文写回 ctx（不含临时注入的记忆），
+             压缩判断在 `add_messages` 内部按 token 阈值自动完成。
         """
         history = self.ctx.messages()
 
-        # 1. 用 user_input 去 Memory 召回相关长期事实
-        relevant = [(score, e) for score, e in self.memory.search(user_input, k=3) if score > 0.5]
-        if relevant:
-            facts_block = "\n".join(f"- {e.text}" for _, e in relevant)
-            injected = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "system", "content": f"[相关长期事实]\n{facts_block}"},
-            ] + [m for m in history[1:] if m["role"] != "system"]
-        else:
-            injected = list(history)
-
+        # 1~2. 用两层记忆重建 system，其余历史消息（非 system）原样跟上
+        injected = [{"role": "system", "content": self._build_system(user_input)}]
+        injected += [m for m in history[1:] if m["role"] != "system"]
         injected.append({"role": "user", "content": user_input})
 
-        # 3. 调 LLM（chat 函数内部强制流式，适配接口限制）
+        # 3. 调 LLM
         msg = chat(
             messages=injected,
             temperature=0.3,
@@ -327,12 +152,14 @@ class AgentV2:
         reply = msg.content or ""
         usage = msg.usage
 
-        # 4. 写回历史（不含临时注入的那条记忆消息）——交给 ContextManager
-        #    统一管理，压缩判断在 add_messages 内部自动完成
-        self.ctx.add_messages(
+        # 4. 只写回原文，交给 ContextManager 统一管理（压缩判断在内部完成）
+        turn = [
             {"role": "user", "content": user_input},
             {"role": "assistant", "content": reply},
-        )
+        ]
+        self.ctx.add_messages(*turn)
+        # 同步留一份到会话原文日志：这份不参与压缩，供 end_session 抽取记忆
+        self._session_log.extend(turn)
         if self.ctx.last_compressed:
             print(f"  ⚙️  上下文估算超过 {self.ctx.max_tokens:,} tokens，触发压缩")
 
@@ -340,36 +167,50 @@ class AgentV2:
         total_tk = usage.total_tokens if usage else 0
         return reply, prompt_tk, total_tk
 
+    def end_session(self) -> None:
+        """会话结束时的写回：一句话同时更新两层记忆。
+
+        Memory 把"两层写时机一致"这件事收口了——这里不用再分别
+        更 profile、追加 history，一句 `commit_session` 全搞定。
+
+        注意传的是 `self._session_log` 而不是 `self.messages`：后者是 ctx 压缩后的
+        上下文，早期 user 原文（如"预算 5000"）可能已被摘要冲掉，拿它抽 Profile 会
+        漏字段。长期记忆写回必须基于本次会话的完整原话，与上下文压缩解耦。
+        """
+        self.memory.commit_session(self._session_log)
+
 
 # ============================================================
-# 跑一个 12 轮对话，把 第 2 章 vs 第 5 章 的 token 消耗对比一下
+# 跑一段多轮对话，观察压缩触发 + 两层记忆的注入效果
 # ============================================================
-def run_comparison() -> None:
+def run_demo() -> None:
     print("=" * 60)
-    print("【对比测试】30 轮对话 v2 Agent 各轮 token 消耗")
+    print("【Agent v2】多轮旅行规划：压缩 + Profile + 历史会话")
     print("=" * 60)
 
-    agent = AgentV2(
-        system_prompt="你是旅行规划师。回答简洁、可执行。",
+    agent = AgentV2(system_prompt="你是旅行规划师。回答简洁、可执行。")
+
+    # 预置两层记忆（模拟"往期会话已经沉淀下来的东西"），全部挂在 agent.memory 上
+    # 第 ① 层：用户的稳定偏好与关键事实，整卡注入、每轮都在
+    agent.memory.profile = Profile(
+        allergies=["花粉"],
+        budget="每日 500 元",
+        preferences=["喜欢博物馆"],
+        city="北京朝阳",
     )
-
-    # 第 1 轮先存 2 个用户硬约束（模拟用户告诉过 Agent 的事）
-    agent.memory.add("用户对花粉过敏，户外活动避开花期。")
-    agent.memory.add("用户每日预算 500 元。")
+    # 第 ② 层：往期会话摘要，按问题召回
+    agent.memory.add_summary("用户上次问过朝阳区附近安静的咖啡馆。")
+    agent.memory.add_summary("用户不喜欢人多嘈杂的网红景点。")
 
     questions = [
-        "我准备 6 月去北京玩 7 天。",
+        "我准备 6 月去北京玩 7 天。预算 5000 元, 喜欢天安门",
         "第 1 天有什么推荐？",
         "第 2 天呢？",
-        "第 3 天去户外好不好？",  # ⭐ 应该触发"过敏"事实召回
+        "第 3 天去户外好不好？",     # ⭐ 档案卡里的"花粉过敏"应影响回答
         "第 4 天就在城里逛吧。",
         "第 5 天有没有什么文化体验？",
-        "第 6 天我想体验下夜景。",
-        "总结一下整体预算。",  # ⭐ 应该触发"预算"事实召回
-        "改一下，第 3 天换室内景点。",
-        "再给我推荐 2 个咖啡馆。",
-        "夜场票好买吗？",
-        "总结所有 7 天的行程，按天列出。",
+        "顺便推荐 2 个安静的咖啡馆。",  # ⭐ 应召回历史会话里的"安静咖啡馆/不喜欢嘈杂"
+        "总结一下整体预算。",          # ⭐ 档案卡里的"每日 500 元"应影响回答
     ]
 
     for i, q in enumerate(questions, 1):
@@ -380,27 +221,29 @@ def run_comparison() -> None:
         print(f"      [prompt={prompt_tk} total={total_tk} messages={len(agent.messages)}]")
 
     print("\n\n" + "=" * 60)
-    print("📝 对话结束，提炼记忆 → Memory")
+    print("📝 会话结束 → 两层记忆写回")
     print("=" * 60)
+    agent.end_session()
 
-    distill_to_memory(agent.messages, agent.memory)
-
-    print(f"\n💾 Memory 现在有 {len(agent.memory.entries)} 条事实：")
-    for entry in agent.memory.entries:
-        print(f"  - {entry}")
-
-    print("   下次会话时这些事实会自动召回，跨会话也'记得'用户。")
+    print("\n① Profile 档案卡（覆盖更新后）：")
+    print(agent.memory.profile_card())
+    print(f"\n② 历史会话向量库（现有 {len(agent.memory.history.entries)} 条摘要）：")
+    for e in agent.memory.history.entries:
+        print(f"  - {e.summary}")
+    print("\n   下次会话时：档案卡整卡注入，相关的历史摘要按问题召回。")
 
 
 if __name__ == "__main__":
-    run_comparison()
+    run_demo()
 
     print("\n\n" + "=" * 60)
-    print("🎯 v2 Agent 跟 第 4 章 朴素版的区别")
+    print("🎯 v2 Agent 跟第 2 章朴素版的区别")
     print("=" * 60)
-    print("  ① ContextManager：messages 超过阈值时主动压缩（截断/摘要/分层）")
-    print("  ② Memory 召回：每轮用 user_input 检索相关长期事实，注入到 system")
-    print("  ③ Memory 提炼：对话结束时用 LLM 提炼新事实，写回 Memory")
+    print("  只多持有两个现成组件，就有了'跨会话的记忆'：")
+    print("  ① ContextManager（13d）：messages 超 token 阈值时主动压缩（截断/摘要/分层）")
+    print("  ② Memory（14c）：两层记忆统一门面，对内 Profile + 历史会话各司其职")
+    print("     · Profile：稳定偏好/关键事实整卡注入，每轮一致生效、覆盖更新、天然免去重")
+    print("     · 历史会话：每轮按 user_input 召回相关往期摘要，会话结束追加一条")
+    print("     · 一句 memory.commit_session() 同时写回两层")
     print()
-    print("  这三件事加在一起，让你的 Agent 第一次有了'跨会话的记忆'。")
-    print("  下一步（第 6/7 章）要做的：把这些组件接进真实的 Coding Agent。")
+    print("  下一步（第 6/7 章）：把 ContextManager + Memory 接进真实的 Coding Agent。")

@@ -30,3 +30,9 @@ ENV/
 
 # Codebuddy 工作计划（运行时生成，不提交）
 .codebuddy/plans
+
+# demo 运行时生成的本地向量库（demo_14a_history.py）
+history_store.json
+
+# demo 运行时生成的本地档案卡（demo_14b_profile.py，纯结构化、无向量）
+profile_store.json

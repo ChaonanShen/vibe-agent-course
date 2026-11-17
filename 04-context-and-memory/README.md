@@ -5,7 +5,7 @@
 # 第 4 章 · 上下文与记忆
 
 本章目标：解决 Agent 的两个关键问题 —— 对话过长导致上下文爆炸（token 超限）、会话结束后遗忘用户偏好（无长期记忆）。
-产出：`my-agent/context.py`（上下文管理器）和 `my-agent/memory.py`（向量记忆系统）。
+产出：`my-agent/context.py`（上下文管理器）和 `my-agent/memory.py`（分层记忆系统）。
 
 
 
@@ -14,8 +14,8 @@
 - 上下文工程要同时解决三个互相牵制的问题：防爆炸（撞窗口）、提缓存命中率（省钱）、防变笨（关键信息被埋）——压缩能防爆炸，却会打断缓存前缀，这是核心矛盾
 - 三种治理策略对比：截断（只留头尾，简单但丢早期事实）、摘要（LLM 压缩中间段，省 token 但会打断缓存前缀）、分层（system / 关键事实 / 早期摘要 / 最近原文分层保留，兼顾防爆炸与防变笨）
 - `ContextManager`：阈值触发压缩 + 分层策略 + 两次压缩之间 append-only，统一协调三个问题而非单独优化一个
-- 向量记忆系统：用 embedding 将事实转为向量，通过余弦相似度检索相关长期记忆，实现跨会话的"读→写"闭环
-- Agent v2 实战整合：将 `ContextManager` 和 `Memory` 接入 Agent Loop，对比朴素版的 token 消耗差异
+- 记忆分两层，数据形态不同、机制不同：Profile 档案卡（结构化稳定事实，LLM 抽字段后覆盖合并、整卡注入、零向量、天然免去重）+ 历史会话（非结构化往期摘要，embed 入库、余弦召回 top-k）；核心原则是"检索策略匹配数据形态"，不是所有记忆都丢向量库
+- Agent v2 实战整合：将 `ContextManager` + Profile + 历史会话接入 Agent Loop，实现跨会话的"读→写"闭环
 
 
 
@@ -24,7 +24,7 @@
 | 节 | 内容 | 讲义 | Demo |
 |----|------|------|------|
 | 13 | 上下文管理：原理、问题与 ContextManager | [13-context-management.md](./lecture/13-context-management.md) | `demo_13a_explosion.py` / `demo_13b_strategies.py` / `demo_13d_context_manager.py` |
-| 14 | Memory 系统 | [14-memory-types.md](./lecture/14-memory-types.md) | `demo_14_memory.py` |
+| 14 | Memory 系统 | [14-memory-types.md](./lecture/14-memory-types.md) | `demo_14a_history.py` / `demo_14b_profile.py` / `demo_14c_memory.py` |
 
 
 
@@ -37,7 +37,10 @@ cd 04-context-and-memory/lab
 python demo_13a_explosion.py        # 上下文爆炸实验
 python demo_13b_strategies.py       # 三种压缩策略对比（截断/摘要/分层）
 python demo_13d_context_manager.py  # 产出 ContextManager 类
-python demo_14_memory.py
+python demo_14a_history.py          # 第一版：历史会话向量库
+python demo_14b_profile.py          # 第二版：Profile 档案卡 + 两层合起来
+python demo_14c_memory.py           # 产出 Memory 类（两层记忆统一门面）
+python demo_15_agent_v2.py          # Agent v2 = ContextManager + Memory
 ```
 
 

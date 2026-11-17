@@ -1,37 +1,22 @@
-# 第 14 节 · 记忆系统：短期 / 长期 / 工作记忆
+# 第 14 节 · 记忆系统：历史会话 + Profile 档案卡
 
-**ContextManager 是"本次对话怎么压缩"，Memory 是"跨会话怎么记住事实并按需召回"。** 二者协作让 Agent 像人一样"既不爆窗也不忘事"。
+**ContextManager 管"本次对话怎么压缩"（第 13 节），这一节管"跨会话怎么记住用户、并在下次用得上"。** 二者配合，Agent 才能既不爆窗、也不每次见面都失忆。
 
-
-
-## 三种记忆，分别管什么
-
-![三类记忆](./images/20-memory-types.png)
-
-| 记忆类型 | 长什么样 | 存活时间 | 谁管 |
-|---|---|---|---|
-| **短期记忆** | 本次对话的 messages 列表 | 对话结束就丢 | 第2章的循环 |
-| **长期记忆** | 持久化的事实库（用户偏好 / 历史决策 / 项目规范） | 跨会话存活 | **Memory（今天主角）** |
-| **工作记忆** | 当下任务用到的精挑信息 | 当前任务用完即弃 | ContextManager |
-
-工业 Coding Agent（Cursor / Claude Code）这三种全用：
-- 短期：本次会话的 chat history
-- 工作：当前任务相关的代码片段、上次工具结果
-- 长期：用户的常用风格 / 项目的代码规范 / Skills
+这一节我们不直接甩出"标准答案"，而是先顺着最自然的思路做一版，再看它在哪撞墙，被撞出来的需求会一步步把我们引到最终的两层结构。
 
 
 
-## 长期记忆要解决什么问题
+## 一个问题：换个会话，Agent 就失忆了
 
 ```mermaid
 flowchart TD
     S1["<b>第 1 次会话</b><br/>━━━━━━━━━━━━<br/>用户：我对花粉过敏<br/>Agent：好的，已记住"]
 
-    S1 --> CHOICE{"下一次会话<br/>有没有 Memory ？"}
+    S1 --> CHOICE{"下一次会话<br/>有没有跨会话记忆？"}
 
-    CHOICE -->|没有| S2["<b>第 2 次会话（❌ 无 Memory）</b><br/>━━━━━━━━━━━━━━━━━━<br/>用户：帮我安排周末户外<br/>Agent：推荐花海公园<br/>用户过敏发作 😷"]
+    CHOICE -->|没有| S2["<b>第 2 次会话（❌ 无记忆）</b><br/>━━━━━━━━━━━━━━━━━━<br/>用户：帮我安排周末户外<br/>Agent：推荐花海公园<br/>用户过敏发作 😷"]
 
-    CHOICE -->|有| S3["<b>第 2 次会话（✅ 有 Memory）</b><br/>━━━━━━━━━━━━━━━━━━<br/>用户：帮我安排周末户外<br/>↳ 召回事实：用户过敏<br/>Agent：避开花季，推荐博物馆"]
+    CHOICE -->|有| S3["<b>第 2 次会话（✅ 有记忆）</b><br/>━━━━━━━━━━━━━━━━━━<br/>用户：帮我安排周末户外<br/>↳ 想起：用户过敏<br/>Agent：避开花季，推荐博物馆"]
 
     classDef base fill:#eff6ff,stroke:#3b82f6,stroke-width:2px,color:#1e40af
     classDef bad  fill:#fef2f2,stroke:#ef4444,stroke-width:2px,color:#991b1b
@@ -43,419 +28,334 @@ flowchart TD
     class CHOICE ctrl
 ```
 
-**没有长期记忆 = 每次会话都是「第一次见面」。**
+第 13 节的 `messages` 列表只活在本次会话里，对话一结束就丢了。**没有跨会话记忆 = 每次会话都是「第一次见面」。**
+
+那怎么办？最直接的想法是：**把聊过的东西存下来，下次需要时再捞回来。** 我们就从这个最朴素的方案开始做。
 
 
 
-## 怎么实现：向量检索
+## 第一版：把历史会话存进向量库
 
-理解了"为什么需要长期记忆"，下面讲"怎么做"。最流行的实现方案是：**向量数据库 + 余弦相似度**。
+用户跟 Agent 的每一次会话，结束后压成一条要点存起来；下次来了，用他当前的问题去"检索相关的往期会话"。这是最符合直觉的做法。
 
-- **向量数据库**：把每条事实编码成向量存起来，支持快速相似度检索
-- **余弦相似度**：衡量"问题"和"事实"语义上有多近
+### 怎么存：每次会话压成一条摘要
 
-核心思路只有三步，我们先跟关键词检索对比一下，再看具体代码。
+不是把每一轮原文都塞进去（噪声多、库膨胀快），而是**一次会话 = 一条摘要**：会话结束用 LLM 压成一句要点，再存进库里。
 
+```python
+def add_session(self, messages):
+    summary = llm.summarize(messages)      # 一次会话 → 一句要点
+    self._store.append((summary, embed(summary)))   # 连同它的向量一起存
+```
 
+### 怎么取：用向量检索，而不是关键词
 
-### 关键词检索 vs 向量检索：为什么选向量
+往期会话是自然语言、条数会一直涨，用户这次问"周末去哪"，要召回的可能是上次那条"因花粉过敏选了室内博物馆"——两句话没有一个共同的词。所以不能用关键词匹配，要用**语义**匹配：
 
-这两条路都能"按问题查事实"，但判断"相关"的方式完全不同：
-
-| | 关键词检索（BM25 / TF-IDF） | 向量检索（embedding + 余弦相似度） |
+| | 关键词检索（BM25 / TF-IDF） | 向量检索（embedding + 余弦） |
 |---|---|---|
-| 判断依据 | 词面重合度：问题和事实**有几个相同的词** | 语义相近度：问题和事实**在向量空间里有多近** |
-| 典型失败案例 | 查"我有什么过敏症状"找不到"我对花粉敏感"（零词面重合） | 几乎不会失败，但向量质量依赖 embedding 模型 |
-| 优点 | 无需外部依赖 / 零成本 / 毫秒级 | 同义、改写、跨语言都能处理 |
-| 缺点 | 字面不匹配就完全失效 | 需要调用 embedding 接口（有成本） |
-| 适合场景 | 术语稳定的领域（API 文档、代码库） | 自然语言对话、用户偏好 |
+| 判断依据 | 词面重合：有几个相同的词 | 语义相近：向量空间里有多近 |
+| 典型失败 | 查"健康限制"找不到"对花粉敏感"（零词面重合） | 同义、改写都能召回 |
+| 代价 | 零成本、毫秒级 | 要调 embedding 接口 |
 
-**为什么 Memory 选向量检索？** 我们的主线是"记住用户偏好和对话事实"，这些都是自然语言，用词完全不可预测——用户说"花粉过敏"，后面可能说"春天能去哪"，关键词检索完全接不住。
-
-> [!TIP]
-> 
-> **延伸：混合检索（Hybrid Retrieval）**
-> 
-> 工业 RAG 系统常常**两条路一起走**：关键词检索负责"精确匹配术语"，向量检索负责"语义匹配"，最后把两份结果合并去重。这是 exercises 里的延伸题，感兴趣可以试试。
-
-
-
----
-
-![向量检索：把句子变成空间里的点](./images/20-vector-search.png)
-
-
-
-### 三步走
-
-#### 第 1 步：把每条事实"编码"成一个向量
+做法就是：把每条摘要和查询都编码成向量，算余弦相似度，取最接近的前 k 条。
 
 ```python
-text = "用户对花粉过敏"
-vector = embedding_model.embed(text)   # 一个 1536 维的向量
-# [0.012, -0.034, 0.567, ..., 0.089]
+def search(self, query, k=3):
+    q = embed(query)                                       # ① 查询也编码成向量
+    scored = [(cosine(q, v), e) for e, v in self._store]   # ② 逐条算余弦相似度
+    scored.sort(key=lambda x: x[0], reverse=True)          # ③ 按分数降序
+    return scored[:k]                                      # ④ 取 top-k
 ```
 
-这个向量是一个空间里的点。**语义相近的句子在空间里就近**。
+### 别忘了持久化：这其实就是个最小本地 RAG
 
-> [!NOTE]
->
-> **关于注释里的「1536 维向量」**
->
-> "1536 维"不是抽象概念——`vector` 就是一个**长度为 1536 的 `list[float]`**，`len(vector) == 1536`。叫"维"是因为数学上每个数对应一根独立坐标轴：3 个数 → 三维空间里的一个点 (x, y, z)；1536 个数 → 1536 维空间里的一个点。
->
-> 这个数字**不是随便选的，由 embedding 模型写死**：OpenAI `text-embedding-ada-002` / `text-embedding-3-small` 是 1536，`text-embedding-3-large` 是 3072，BGE-base / M3E-base 是 768，腾讯混元 `hunyuan-embedding` 是 1024 或 1536（看版本）。所以注释里的 1536 是举例，**实际跑起来 `len(vec)` 是多少，看你用哪个模型**。
->
-> 几何含义就是后面整套向量检索的基石：embedding 模型的训练目标是**把语义相近的句子，编码到这个高维空间里靠近的位置**——人脑想象不了 1536 维，但"距离/夹角"的数学运算照样能做，这就是第 3 步用 `cosine` 算相似度的依据。
->
-> 维度并非越高越好：维度高表达力强、召回质量好，但每条向量占 `4 × 1536 = 6KB`（float32），10 万条事实就是 600MB，余弦遍历也变慢——这是后面要引入向量数据库（FAISS / Milvus / Qdrant）的根本原因。
-
-
-
-#### 第 2 步：所有事实都存成 (text, vector) 对
-
-事实有两个来源：
-1. **用户主动说**："我对花粉过敏" → 直接存
-2. **对话结束提炼**：用 LLM 从对话记录里提炼值得长期记的事实（第 4 步会讲）
+记忆是要**跨进程存活**的——Agent 重启、换个会话，历史会话库不能跟着清零。所以 `embed` 出来的向量要连同摘要一起**落盘**，下次直接加载，而不是每次重新 embed（embedding 有成本和延迟，重算几千条很浪费）。
 
 ```python
-memory = [
-    ("用户对花粉过敏", vec_1),
-    ("用户每天预算 500 元", vec_2),
-    ("用户喜欢博物馆", vec_3),
-    ...
-]
+def save(self, path):   # 摘要 + 向量一起写进 JSON
+    data = [{"summary": e.summary, "vec": e.vec.tolist()} for e in self._entries]
+    json.dump(data, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+
+def load(self, path):   # 读回时 list 转回 ndarray，已有向量不必重算
+    data = json.load(open(path, encoding="utf-8"))
+    self._entries = [SessionEntry(d["summary"], np.array(d["vec"], "float32")) for d in data]
 ```
 
-> [!NOTE]
-> 
-> **生产环境的做法**
-> 
-> 上面用 Python list 只是演示。生产环境中：
-> - **存储**：用向量数据库（FAISS / Qdrant / Milvus / pgvector），支持快速 ANN 检索
-> - **去重**：存入前检查相似度，避免“用户对花粉过敏”和“用户花粉过敏”重复存储
-> - **元数据**：每条事实附带 `timestamp`、`source`（用户说 / AI 提炼）、`confidence` 等字段
-> - **原子性**：每条只存**一个事实**，不要存段落。对比：
->   - ✅ `("用户对花粉过敏", vec)`  
->   - ❌ `("用户过敏，预算500，喜欢博物馆", vec)` ← 混在一起，召回时要么全召回要么全不召回
+把这三件事连起来——**落盘保存 → 下次加载 → 向量召回**——就是一个麻雀虽小的本地 RAG：一个持久化的向量存储 + 一个语义检索接口。`demo_14a_history.py` 的第二个演示完整跑了这个闭环。生产上只是把这里的 JSON 换成 FAISS / Qdrant / pgvector，"存向量 + 按相似度查"的思路一模一样。
 
+<details>
+<summary><b>选读：Embedding 和余弦相似度的原理</b></summary>
 
-
-#### 第 3 步：查询时，用余弦相似度召回相关事实
+**Embedding 模型**是一个专门把文本变向量的独立模型（不是 chat 模型，它不对话、只编码）：
 
 ```python
-query = "周末有没有什么健康限制"
-q_vec = embedding_model.embed(query)      # ① 查询也编码成向量
-
-# ② 和每条事实算余弦相似度
-texts = [text for text, _ in memory]
-scores = [cosine(q_vec, v) for _, v in memory]
-
-# ③ 取分数最高的 top-k，完成召回
-top_k = sorted(zip(scores, texts), reverse=True)[:3]
-# → [(0.78, "用户对花粉过敏"), (0.31, "用户喜欢博物馆"), ...]
+resp = client.embeddings.create(model="hunyuan-embedding", input="用户对花粉过敏")
+vec = resp.data[0].embedding     # 一个定长 float 列表，长度约 1024 / 1536
 ```
 
-分数越高，语义越近。这份召回结果后面会塞进 system prompt，模型就能“记住”这些事实了。
+这个向量就是高维空间里的一个点，**语义相近的句子，点也靠得近**。向量长度（维度）由模型写死：OpenAI `text-embedding-3-small` 是 1536，`text-embedding-3-large` 是 3072，混元 `hunyuan-embedding` 约 1024/1536。维度越高表达力越强，但每条向量越占空间、遍历越慢——这是量大之后要上专业向量库的原因。
 
-> [!NOTE]
->
-> **`zip` 函数的作用**
->
-> `zip(scores, texts)` 把两个列表"打包"在一起，让每个分数和对应的文本绑定成一对：
->
-> ```python
-> scores = [0.78, 0.31, 0.95]
-> texts  = ["用户对花粉过敏", "用户每天预算 500 元", "用户喜欢博物馆"]
-> 
-> zip(scores, texts)
-> # → [(0.78, "用户对花粉过敏"), (0.31, "用户每天预算 500 元"), (0.95, "用户喜欢博物馆")]
-> ```
->
-> 打包后，`sorted(..., reverse=True)` 才能按分数从高到低排序，同时保持分数和文本的对应关系不变。类似拉链，`zip` 把两边一一对齐“拉上”。
->
-> **那么为什么 `sorted` 按 `score` 排序而不是 `text`？**
->
-> `zip(scores, texts)` 产出的是一个个**二元组**（tuple），例如 `(0.78, "用户对花粉过敏")`。Python 对 tuple 排序遵循**字典序（lexicographical order）**：
->
-> 1. **先比较第 1 个元素**（这里是 `score`）
-> 2. 如果第 1 个元素相同，**再比较第 2 个元素**（这里是 `text`）
->
-> 这正是我们需要的行为——想让谁排前面，就把它放在 tuple 的第一位。如果想按 `text` 排序，需要显式指定 `key`：
->
-> ```python
-> sorted(zip(scores, texts), key=lambda x: x[1], reverse=True)
-> # → 按 text 字符串（Unicode 编码）排序，结果会乱
-> ```
->
-> **总结**：不是 `sorted` 特意针对 `score`，而是 Python tuple 排序**默认从第一个元素开始比**，而 `zip(scores, texts)` 恰好把 `score` 放在前面。
-
-
-
-## Embedding 模型与余弦相似度
-
-上面三步走的第 1 步和第 3 步反复用到了两个东西：**Embedding 模型**（文本 → 向量）和**余弦相似度**（两向量有多近）。这一节把它们的细节展开讲清楚。
-
-Embedding 模型是一个**专门把文本变向量的独立模型**，跟 chat 模型不是一回事——它不会对话，只管编码。
+**余弦相似度**衡量两个向量方向有多接近：
 
 ```python
-from openai import OpenAI
-
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-resp = client.embeddings.create(
-    model="hunyuan-embedding",   # CNB 上是这个名字
-    input="用户对花粉过敏",
-)
-vec = resp.data[0].embedding     # → [float] 长度 1024 或 1536
-```
-
-接口跟 chat completion 同一个 base_url + 同一个 API key，**只是端点是 `/embeddings`**。
-
-
-
-### 余弦相似度怎么算
-
-```python
-import numpy as np
-
 def cosine(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 ```
 
-返回值 [-1, 1]，**越接近 1 越相似**。一般 > 0.5 算"挺相关"，> 0.7 算"很相关"。
+它算的就是两向量夹角的 `cos(θ)`：点积定义 `a·b = |a||b|cos(θ)`，分母把长度约掉只剩方向；θ 从 0°→180°，`cos` 从 1（同向、最相似）单调降到 -1（反向）。embedding 的训练目标就是把语义近的句子映射到方向近的向量，所以"夹角小 ↔ cos 大 ↔ 语义近"。
+
+```text
+                 "用户对花粉过敏"
+                         ↗  ← 夹角小，cos ≈ 0.8（相关）
+   query:"周末有    ↗
+   健康限制吗"   ●──────────→  "用户喜欢博物馆"
+                              ↑ 夹角约 90°，cos ≈ 0.1（无关）
+```
+
+阈值 0.5 / 0.7 是经验值：完全无关的文本余弦通常落在 0.0~0.3，同主题约 0.5~0.75，近义改写 0.85+。**换 embedding 模型阈值会整体平移**，工程上要抽样校准。
+
+</details>
+
+到这里，"记住往期会话、按语义召回"已经能跑了。但如果 Agent 的记忆**只有这一层**，很快就会出事。
+
+
+
+## 问题来了：只靠向量库，有两个硬伤
+
+向量库擅长装"可能相关的往期上下文"，但有一类信息放进去就会出问题——**用户的稳定偏好、习惯，以及特定领域必须保持准确的关键事实**（比如"只用 TypeScript"、套餐等级、过敏源）。向量库的两个天性正好毁掉它们：
+
+- **硬伤一·一致性**：召回是**概率性 top-k**，不是"所有该生效的事"。该一直生效的偏好，一旦和当前问题措辞不够近就漏召回，Agent 时而记得、时而忘记。
+- **硬伤二·准确性**：向量库**只增不改**。用户把"预算 500"改成"预算 800"，两条会同时留在库里，Agent 分不清哪个有效，还越存越臃肿。
+
+归纳一下，这类信息数量不多、天然是"字段 → 值"的结构，需要"每轮一致生效"且"随时可更新为最新值"——根本不适合丢进"概率召回 + 只增不改"的向量库。**把它们单独拎出来，做成一张结构化的档案卡。**
+
+
+
+## 第二版：把稳定偏好与关键事实拎进 Profile 档案卡
+
+Profile 就是一张"关于这个用户的结构化卡片"——每条信息落到一个**固定字段**上，而不是一段自由文本。字段集随 Agent 领域而定：个人助手可能是过敏/预算/城市，编程助手则可能是技术栈/代码风格/项目规范。
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class Profile:
+    preferences: list[str] = field(default_factory=list)  # 偏好 / 习惯（多值）
+    allergies: list[str] = field(default_factory=list)    # 过敏源（多值）
+    dietary: list[str] = field(default_factory=list)      # 忌口（多值）
+    budget: str = ""    # 预算（单值）
+    city: str = ""      # 常驻城市（单值）
+```
+
+它正好一刀解决上面两个硬伤：
+
+### 解决硬伤一：整卡注入，偏好每轮一致生效
+
+档案卡很小，取用时**不检索、直接整张塞进 system**。于是偏好、习惯、领域关键事实**每一轮都在场**，不管用户当前问什么，个性化不再碰运气，也不会因措辞不匹配而漏掉领域事实。
+
+```python
+def profile_card(self):
+    # → "- 过敏源：花粉、尘螨\n- 预算：每天 800 元\n- 常驻城市：北京朝阳"
+    ...
+```
+
+### 解决硬伤二：覆盖合并，永远是最新值
+
+每次会话结束，用一次 LLM 调用把对话抽成**上面这套 schema 的字段**（只抽这次提到的，是个增量），再由 Python 做合并。合并分两种语义：
+
+```python
+def commit_session(self, messages):
+    delta = _extract_profile_fields(messages)   # LLM → 只含本次提到的字段
+
+    # 单值字段：新值非空就覆盖（预算 500 → 800，旧值直接被替换）
+    for f in ("budget", "city"):
+        if delta.get(f):
+            setattr(self, f, delta[f])
+
+    # 多值字段：并集 + 去重（过敏源只增不丢，也不会重复）
+    for f in ("allergies", "dietary", "preferences"):
+        merged = dict.fromkeys(getattr(self, f) + delta.get(f, []))
+        setattr(self, f, list(merged))
+```
+
+- 单值字段（预算、城市）：最新的**覆盖**旧的，不会出现"500"和"800"并存；
+- 多值字段（过敏源、偏好）：`dict.fromkeys` 保序**并集去重**，重复说"对花粉过敏"也只留一条。
+
+这就是结构化存储的红利——**天然免去重、天然可更新**，而这恰恰是向量库做不到的。
 
 > [!NOTE]
 >
-> **为什么"越接近 1 越相似"**
+> **为什么让 LLM 抽"字段"而不是抽"句子"？**
 >
-> `cosine(a, b)` 算出来的就是两向量夹角 θ 的 `cos(θ)`：
->
-> - 点积的几何定义 `a · b = |a| · |b| · cos(θ)`，分母 `|a| · |b|` 把长度约掉，**只剩方向**。（即 
-> - 三角函数性质：θ ∈ [0°, 180°] 上 `cos(θ)` 单调递减——0° → 1（同向，最相似），90° → 0（垂直，无关），180° → -1（反向，最不相似）。
-> - embedding 模型的训练目标就是把**语义相近的句子映射到方向相近的向量**。所以"夹角小 ↔ cos 大 ↔ 语义近"。
->
-> 用一张二维示意图直观感受一下（箭头从原点出发）：
->
-> ```text
->                  "用户对花粉过敏"
->                          ↗  ← 夹角很小，cos ≈ 0.95（语义近）
->                       ↗
->     query: "周末有  ↗
->     健康限制吗"   ●─────────────→  "用户喜欢逛博物馆"
->                    \              ↑ 夹角约 90°，cos ≈ 0.05（无关）
->                     \
->                      ↘
->                       ↘  ← 夹角接近 180°，cos ≈ -0.9（相反）
->                "用户讨厌一切户外活动"
-> ```
->
-> 同一个 query，跟三段记忆分别算余弦：方向越贴近，分数越高 → 召回时排第一。
->
-> 阈值 0.5 / 0.7 是经验值：高维空间里完全无关的文本余弦也很少为 0（通常 0.0~0.3），同主题约 0.5~0.75，近义改写 0.85+。**换 embedding 模型阈值会平移**，工程上要抽样校准。
->
+> 抽成固定字段，才能做"覆盖"——知道"800"要去替换 `budget`，而不是新增一条。
+> 如果抽成自由句子（"用户预算 800"），就只能当新记录追加，又回到向量库那个老问题。
+> 结构化的价值正是：**让"更新"成为可能，而不是只能"追加"。**
 
 
 
-## 一个最小 Memory 类
+## 合起来：两层各管一类数据
 
-把前面三步走串起来，就是一个能用的 Memory 类——只用了 10 行代码：
+走到这里，两层记忆是被"问题"一步步逼出来的，各自的边界也就清楚了：
 
-```python
-class Memory:
-    """最小可用的向量记忆：存入事实 → 按语义召回。"""
+| | 历史会话 | Profile 档案卡 |
+|---|---|---|
+| 存什么 | 说过的话：每次会话的要点 | 稳定的偏好 / 习惯 / 领域关键事实：偏好 / 过敏 / 预算 / 城市 / 技术栈… |
+| 数据形态 | 大、**非结构化**、只增不减 | 小、**结构化**（固定字段，随领域而定） |
+| 怎么更新 | **追加**（append-only） | **覆盖合并**（新值覆盖 / 并集去重） |
+| 怎么取用 | **向量召回 top-k**，按需取 | **整卡注入**，每轮都在 |
+| 要不要 embedding | 要 | **不要** |
+| 适合装 | "可能相关"的往期上下文 | "该一直生效且保持最新"的偏好 / 习惯 / 领域数据 |
 
-    def __init__(self):
-        self.entries: list[tuple[str, list[float]]] = []   # [(text, vector)]
+一句话主线：
 
-    def add(self, text: str) -> None:
-        """存入一条事实：文本编码为向量，和原文一起保存（步骤 1+2）。"""
-        self.entries.append((text, embed(text)))
+> **检索策略要匹配数据形态**——非结构化的大数据才上向量（历史会话），结构化的小数据直接全塞（Profile）。不是所有记忆都该丢进向量库。
 
-    def search(self, query: str, k: int = 3) -> list[tuple[float, str]]:
-        """按语义召回 top-k 条相关事实（步骤 3）。"""
-        q = embed(query)                                            # ① 查询也编码成向量
-        scored = [(cosine(q, v), t) for t, v in self.entries]      # ② 遍历记忆，逐一算余弦相似度
-        scored.sort(reverse=True)                                   # ③ 按分数降序（tuple 默认比第一个元素）
-        return scored[:k]                                           # ④ 返回 top-k
-```
-
-三行核心逻辑对应前面三步走：
-
-| 代码 | 对应步骤 |
-|---|---|
-| `self.entries.append((text, embed(text)))` | 步骤 1+2：编码 + 存储 |
-| `scored = [(cosine(q, v), t) for ...]` | 步骤 3：逐条算相似度 |
-| `scored.sort(reverse=True)` + `[:k]` | 步骤 3：排序 + 取 top-k |
-
-**就这么简单。** `demo_14_memory.py` 完整版在这基础上加了持久化、元数据和阈值过滤，核心还是这十行。
-
-
-
-## 将 Memory 集成到 Agent：两个时机
-
-Memory 和 Agent 的协作是一个**"读 → 写"闭环**：
-
-- **对话前（读）**：从 Memory 召回相关事实，注入 system prompt，让模型"想起"历史
-- **对话后（写）**：从本轮对话中提炼值得长期记的事实，写回 Memory，留给下次用
-
-下面分别看这两个时机的代码。
-
-
-
-### 步骤 1：每轮对话前，召回事实注入 prompt
-
-这是 Memory 的 **"读"** 环节——每轮对话开始前，用当前问题去 Memory 里检索，把相关事实注入 system prompt：
-
-```python
-def chat(user_input):
-    # ① 用当前问题作为查询，召回 top-3 相关事实
-    relevant = memory.search(user_input, k=3)
-
-    # ② 阈值过滤：相似度 < 0.5 的不要，避免无关信息污染 prompt
-    facts = [t for score, t in relevant if score > 0.5]
-
-    # ③ 把召回的事实拼进 system prompt
-    system = f"{base_system_prompt}\n\n[相关长期事实]\n" + "\n".join(facts)
-
-    # ④ 和正常的 chat history 一起发给 LLM
-    return llm.chat([{"role": "system", "content": system}, ...])
-```
-
-**关键点**：Memory 做的事情就是把召回结果"塞"进 system prompt。模型本身没有任何变化，它只是看到了更多上下文，就能"想起"跨会话的事实了。
-
-
-
-### 步骤 2：对话结束后，提炼事实写回 Memory
-
-这是 Memory 的 **"写"** 环节——对话结束后，用 LLM 从本轮对话中提炼值得长期记的事实，存回 Memory：
-
-```python
-# ① 设计提炼 prompt：告诉 LLM 哪些该存、哪些不该存
-DISTILL_PROMPT = """从下面对话提炼**值得长期记的事实**，每行一条：
-- 用户偏好
-- 硬约束
-- 重要事实
-不要把一次性问答存进去。
-
-对话：{transcript}
-"""
-
-# ② 调 LLM 提炼事实（LLM 输出每行一条事实的纯文本）
-new_facts = llm.chat(...)
-
-# ③ 逐行写入 Memory（内部自动做 embedding + 存储）
-for fact in new_facts.splitlines():
-    if fact.strip():                # 跳过空行
-        memory.add(fact)
-```
-
-**关键点**：不是把所有原始对话都往 Memory 里塞，而是用 LLM **先提炼、再存入**。`DISTILL_PROMPT` 里特别叮嘱"不要把一次性问答存进去"，就是为了避免"你刚才说了什么"这类临时对话污染记忆库。
-
-下次会话步骤 1 召回时，这些事实就会被自动检索到——**"读 → 写"闭环就此完成**。
-
-
-
-## 一个常见困惑：Memory 和 ContextManager 怎么协作？
+### 一次完整的"读 → 写"闭环
 
 ```mermaid
 flowchart TD
-    Q[/"用户当前问题 query"/]
+    Q[/用户当前问题 query/] --> H
+    Q --> P
 
-    MEM["<b>Memory：长期事实库（跨会话持久化）</b><br/>━━━━━━━━━━━━━━━<br/>· 用户过敏<br/>· 预算 500<br/>· 偏好博物馆<br/>· ……"]
+    subgraph LT["长期记忆（本节主角）"]
+      H["历史会话向量库<br/>非结构化·追加"]
+      P["Profile 档案卡<br/>结构化·覆盖更新"]
+    end
 
-    Q -->|"按 query 算余弦，召回 top-k"| MEM
+    H -->|"按 query 召回 top-k"| S["system ＋ 两层记忆"]
+    P -->|"整卡注入（不检索）"| S
+    S --> MS["近 N 轮对话 + user 当前问题"]
+    MS --> CM{"ContextManager（§13）<br/>本轮 messages 超阈值？"}
+    CM -->|否：原样发出| LLM[["调 LLM"]]
+    CM -->|是：压缩中间段| LLM
 
-    S["system ＋ 召回的长期事实"]
-    H["近 N 轮对话原文"]
-    U2["user 当前问题"]
-
-    MEM -->|"relevant facts 拼进 system"| S
-    S --> H --> U2
-
-    U2 --> CM{"ContextManager<br/>本轮 messages<br/>长度超阈值？"}
-    CM -->|"否：原样发出"| LLM
-    CM -->|"是：压缩中间一段"| LLM[["调 LLM"]]
-
-    classDef mem fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#92400e
-    classDef msg fill:#dbeafe,stroke:#3b82f6,stroke-width:1px,color:#1e40af
+    classDef p fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#92400e
+    classDef h fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e40af
+    classDef msg fill:#eff6ff,stroke:#3b82f6,stroke-width:1px,color:#1e40af
     classDef ctrl fill:#fce7f3,stroke:#ec4899,stroke-width:2px,color:#9d174d
     classDef llm fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-    class MEM mem
-    class S,H,U2 msg
+    class P p
+    class H h
+    class S,MS msg
     class CM ctrl
     class LLM llm
 ```
 
-> [!NOTE]
+- **对话前（读）**：历史会话按问题召回 top-k + Profile 整卡注入，一起拼进 system；
+- **对话后（写）**：历史会话追加一条本次会话摘要，Profile 覆盖更新档案卡；
+- **ContextManager（第 13 节）**：只负责把"拼好的这一轮 messages"在超阈值时压缩，它不关心记忆从哪来——**Memory 决定塞什么进来，ContextManager 决定塞进来的怎么压**。
+
+```python
+# 对话前：两层各取各的，一起进 system
+system = BASE + render(history.search(question, k=3)) + profile.profile_card()
+
+# 对话后：两层各写各的
+history.add_session(session)                # 追加一条摘要
+profile.commit_session(session)   # 覆盖更新
+```
+
+> [!QUESTION]
 >
-> 色块说明：
->
-> 1. 黄色：长期记忆 Memory
-> 2. 蓝色三段：本轮 messages（短期/工作记忆）
-> 3. 粉色：控制节点 ContextManager
-> 4. 绿色：最终发给 LLM
+> **留给你的思考题**：这里每轮都把 `history.search()` 召回的 top-k 记忆拼进 **system 的开头**，而 top-k 的内容是随当前问题变化的。回想第 13 节的前缀缓存三条规则——缓存只认"从头连续一致、位置也一致的前缀"。那么：**每轮都变的召回记忆放在 system 开头，会对 KV 缓存命中率造成什么影响？如果要尽量少破坏缓存，这两层记忆（Profile / 历史会话）分别该放在一轮 messages 的什么位置、以什么频率刷新？**
 
 
 
-**两件事的分工：**
+## 产出：`Memory` 类
 
-- **Memory** 决定"哪些长期事实塞进来"
-- **ContextManager** 决定"塞进来的本次 messages 怎么压"
+上面那段"对话前拼 system、对话后各写各的"编排，如果每次都让调用方攥着 `history`、`profile` 两个对象手动来回倒腾，很容易写乱——忘了写哪一层、两层落盘不同步都是常见坑。和第 13 节把上下文治理收口成 `ContextManager` 对称，这里把"两层记忆怎么用"收口成一个门面类 `Memory`：
+
+```python
+from demo_14a_history import History, SessionEntry
+from demo_14b_profile import Profile
 
 
+class Memory:
+    """两层长期记忆的统一门面：对外一个 Memory，对内 History + Profile 各司其职。"""
 
-## 生产环境的进阶方向
+    def __init__(self, profile: Profile | None = None, history: History | None = None):
+        self.profile = profile or Profile()
+        self.history = history or History()
 
-当前实现的 `Memory` 是最小可用版，适合学习和原型验证。以下是从 demo 到上线需要补齐的六个方向：
+    # ---------- 读：对话前（接口刻意不统一） ----------
+    def profile_card(self) -> str:
+        """Profile 整卡渲染，没有 query——它该一直生效，不检索。"""
+        return self.profile.profile_card()
 
-| 进阶项 | 要做什么 | 为什么 |
-|---|---|---|
-| 向量库 | 换成 FAISS / Qdrant / Milvus / pgvector | `numpy` 逐条算余弦是 O(n)，上万条事实后每一轮召回都卡；向量库用 ANN 索引可以 O(log n) |
-| Embedding 缓存 | 同一段文本不重复 embed（按文本 hash 缓存） | embedding 接口有成本和延迟，同一事实反复调用浪费资源 |
-| 阈值过滤 | 相似度 < 阈值的结果直接丢弃（步骤 1 代码中已用 `> 0.5`） | 不相关的事实注入 prompt 是噪声，反而干扰模型 |
-| 时间衰减 | 老记忆权重随时间递减 | 用户偏好会变化，一年前的"预算 500"可能已涨到 800 |
-| 混合检索 | 向量检索 + 关键词检索，两者结果合并去重 | 精确术语（API 名、配置项）关键词匹配更准，自然语言向量匹配更好——结合两者取长补短 |
-| 用户分区 | 每条事实绑定 `user_id`，按用户隔离检索 | 多用户场景下不能把张三的花粉过敏召回给李四 |
+    def search(self, query: str, k: int = 3) -> list[tuple[float, SessionEntry]]:
+        """History 按问题语义召回 top-k——要检索。"""
+        return self.history.search(query, k=k)
 
-第 7 章和第 8 章介绍工业级 Agent 时会逐一展开这些内容。
+    # ---------- 写：预置 / 对话后 ----------
+    def add_summary(self, summary: str) -> None:
+        """直接追加一条历史摘要（预置往期记忆用）。"""
+        self.history.add_summary(summary)
+
+    def commit_session(self, messages: list[dict]) -> tuple[dict, str]:
+        """会话结束时一次写回两层：Profile 覆盖更新 + History 追加一条摘要。"""
+        delta = self.profile.commit_session(messages)
+        summary = self.history.add_session(messages)
+        return delta, summary
+
+    # ---------- 持久化：两层一起 ----------
+    def save(self) -> None:
+        """一次 save 落盘两层：History 带向量、Profile 纯字段。"""
+        self.history.save()
+        self.profile.save()
+
+    def load(self) -> None:
+        """一次 load 还原两层。"""
+        ...
+```
+
+`Memory` **不发明任何新机制**，它只收口两件最容易写乱的事——**写入时机**（两层都在"会话结束"那一刻写，于是 `commit_session()` 一次写完）和**持久化**（`save()`/`load()` 一次搞定两层，底层仍是 `history_store.json` 带向量、`profile_store.json` 纯字段两个文件）。
+
+但要特别注意：**读取接口刻意不统一**，这正是本节主线，门面不该把它抹平——`profile_card()` 无 query、整卡注入（它该一直生效，不检索），`search(query, k)` 按问题召回 top-k（要检索）。两层数据形态不同，检索策略就必须不同，强行合成一个 `get()` 方法只会两边都做不好。完整可运行版本（含 `save/load` 细节、冷启动处理）见 [`demo_14c_memory.py`](../lab/demo_14c_memory.py)。
+
+| 门面收口的事 | 为什么收口 |
+|---|---|
+| `commit_session()` 一次写两层 | 两层写入时机本就一致（会话结束），调用方不必记得"先更 Profile 再 add_session" |
+| `save()` / `load()` 一次落盘/还原两层 | 避免两层持久化不同步 |
+| 读取接口**不**统一（`profile_card` vs `search`） | 数据形态不同、检索策略就不同——这是本章主线，不能为了"看起来整齐"抹掉 |
+
+到了下一节 `demo_15`，`AgentV2` = `ContextManager` + `Memory` 两个现成组件一拼即成：**Memory 决定塞什么进来，ContextManager 决定塞进来的怎么压**。
 
 
 
 ## 动手实践
 
-在云原生开发环境中运行配套演示脚本，直观感受 Memory 的召回效果：
-
 ```bash
-python demo_14_memory.py
+cd 04-context-and-memory/lab
+python demo_14a_history.py   # 第一版：历史会话向量库
+python demo_14b_profile.py   # 第二版：Profile 档案卡 + 两层合起来
 ```
 
-脚本依次跑两个演示：
+`demo_14a_history.py`（历史会话向量库）跑两个演示：**① 向量召回**——预置几条往期会话摘要，用不同问题做召回，看语义相近的被排到前面，并暴露"概率召回 + 只增不改"两个硬伤；**② 本地持久化**——把摘要+向量落盘成 JSON，再用一个全新实例加载、直接查询，走通"持久化 → 加载 → 召回"的最小本地 RAG 闭环。
 
-1. **基本召回**：预置 5 条事实，用 4 个不同查询测试——看余弦相似度能否把语义相近的事实排到前面
-2. **注入对话**：把步骤 1+2 串起来走一遍完整流程——召回事实 → 注入 system prompt → 完成对话 → 提炼新事实写回
+`demo_14b_profile.py`（Profile + 两层合并）跑两个演示：
+
+1. **Profile 覆盖更新**：第 1 次会话抽出预算 500、第 2 次会话说涨到 800——看档案卡里预算被覆盖（单值）、过敏源变成并集（多值），亲眼见证"天然去重 + 可更新"；
+2. **两层注入对话**：历史会话 top-k + Profile 整卡一起塞进 system，真调一次 LLM，看回答是否同时体现往期上下文和稳定偏好。
 
 
 
 ## 要点回顾
 
-本节从"为什么要长期记忆"出发，走完了向量检索的原理、实现和集成。核心概念一句话总结：
-
 | 概念 | 一句话理解 |
 |------|-----------|
-| 短期记忆 | 本次对话的 messages，对话结束即丢弃（Agent 循环管） |
-| 长期记忆 | 跨会话持久化的事实库，基于向量检索按语义召回（Memory 管） |
-| 工作记忆 | 当前任务精挑的上下文片段，用完即弃（ContextManager 管） |
-| Memory | 长期记忆的实现：`add()` 编码+存储，`search()` 向量检索召回 |
-| Embedding | 把文本变成向量的独立模型（不是 chat 模型），向量长度由模型写死 |
-| 余弦相似度 | 衡量两向量方向有多近，值 ∈ [-1,1]，越接近 1 语义越近 |
-| 集成方式 | 每轮对话前召回事实注入 system prompt（读）→ 对话结束后提炼新事实写回（写），形成闭环 |
+| 失忆问题 | `messages` 只活在本次会话，跨会话要靠长期记忆 |
+| 历史会话（第一版） | 每次会话压一条摘要 → embed 入库 / 追加 / 向量召回 top-k |
+| 向量库的两个硬伤 | 该一直生效的偏好时有时无（概率召回→一致性问题）、偏好变了没法更新（只增不改→准确性问题） |
+| Profile 档案卡（解法） | 装稳定偏好/习惯/领域关键事实：固定字段 / 覆盖合并 / 整卡注入 / 零向量 / 天然免去重可更新 |
+| 检索策略匹配数据形态 | 大而自由才上向量，小而结构化就全塞——不是所有记忆都丢向量库 |
+| Embedding / 余弦 | 把文本变向量的独立模型；余弦衡量两向量方向多近，∈ [-1,1] |
+| 和 ContextManager 的分工 | Memory 决定"塞什么进来"，ContextManager 决定"塞进来的怎么压" |
 
 
 
 ---
 
 理论部分到此结束。下面 lab：
-- Part 1：写 ContextManager（分层策略）
-- Part 2：写 Memory（向量检索）
-- Part 3：拼成 Agent v2，对比第3章朴素版的 token 消耗
+- Part 1：写 ContextManager（分层策略，第 13 节）
+- Part 2：写 历史会话 + Profile 两层记忆
+- Part 3：拼成 Agent v2，对比第 3 章朴素版的 token 消耗
